@@ -18,6 +18,13 @@ struct AzureReadOptions {
 	idx_t buffer_size = 1 * 1024 * 1024;
 };
 
+struct AzurePathMetadata {
+	time_t last_modified = 0;
+	idx_t file_size = 0;
+};
+
+using AzurePathMetadataCache = std::map<std::string, AzurePathMetadata>;
+
 class AzureContextState : public ClientContextState {
 public:
 	const AzureReadOptions read_options;
@@ -111,6 +118,12 @@ protected:
 
 	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
 	static AzureReadOptions ParseAzureReadOptions(optional_ptr<FileOpener> opener);
+
+	// Cache with metadata of paths, this is useful for performance to avoid making
+	// multiple requests to the Azure service for getting properties of same path.
+	AzurePathMetadataCache path_metadata_cache;
+
+public:
 	static time_t ToTimeT(const Azure::DateTime &dt);
 };
 

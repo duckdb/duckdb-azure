@@ -28,7 +28,9 @@ inline static bool IsDfsScheme(const string &fpath) {
 }
 
 static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient &fs, const std::string &path,
-                 const string &path_pattern, std::size_t end_match, std::vector<std::string> *out_result) {
+                 const string &path_pattern, std::size_t end_match,
+                 std::vector<std::string> *out_result,
+                 AzurePathMetadataCache *out_path_metadata_cache) {
 	auto directory_client = fs.GetDirectoryClient(path);
 
 	bool recursive = false;
@@ -56,13 +58,18 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 							continue;
 						}
 						Walk(fs, elt.Name, path_pattern,
-						     std::min(path_pattern.length(), path_pattern.find('/', end_match + 1)), out_result);
+						     std::min(path_pattern.length(), path_pattern.find('/', end_match + 1)),
+						     out_result,
+						     out_path_metadata_cache);
 					}
 				}
 			} else {
 				// File
 				if (Glob(elt.Name.data(), elt.Name.length(), path_pattern.data(), path_pattern.length())) {
 					out_result->push_back(elt.Name);
+					auto last_modified = AzureStorageFileSystem::ToTimeT(elt.LastModified);
+					auto file_size = (idx_t)elt.FileSize;
+					out_path_metadata_cache->insert({elt.Name, AzurePathMetadata{last_modified, file_size}});
 				}
 			}
 		}
@@ -146,7 +153,8 @@ vector<string> AzureDfsStorageFileSystem::Glob(const string &path, FileOpener *o
 	     // pattern to match
 	     azure_url.path, std::min(azure_url.path.length(), azure_url.path.find('/', index_root_dir + 1)),
 	     // output result
-	     &result);
+	     &result,
+	     &path_metadata_cache);
 
 	if (!result.empty()) {
 		const auto path_result_prefix =
@@ -165,9 +173,19 @@ vector<string> AzureDfsStorageFileSystem::Glob(const string &path, FileOpener *o
 void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	auto &hfh = handle.Cast<AzureDfsStorageFileHandle>();
 
-	auto res = hfh.file_client.GetProperties();
-	hfh.length = res.Value.FileSize;
-	hfh.last_modified = ToTimeT(res.Value.LastModified);
+	const std::string &path = handle.path;
+	auto azure_url = ParseUrl(path);
+
+	auto entry = path_metadata_cache.find(azure_url.path);
+	if (entry != path_metadata_cache.end()) {
+		hfh.length = entry->second.file_size;
+		hfh.last_modified = entry->second.last_modified;
+	}
+	else {
+		auto res = hfh.file_client.GetProperties();
+		hfh.length = res.Value.FileSize;
+		hfh.last_modified = ToTimeT(res.Value.LastModified);
+	}
 }
 
 void AzureDfsStorageFileSystem::ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out,

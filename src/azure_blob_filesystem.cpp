@@ -148,6 +148,10 @@ vector<string> AzureBlobStorageFileSystem::Glob(const string &path, FileOpener *
 			if (is_match) {
 				auto result_full_url = path_result_prefix + '/' + key.Name;
 				result.push_back(result_full_url);
+
+				auto last_modified = AzureStorageFileSystem::ToTimeT(key.Details.LastModified);
+				auto file_size = (idx_t)key.BlobSize;
+				path_metadata_cache.insert({key.Name, AzurePathMetadata{last_modified, file_size}});
 			}
 		}
 
@@ -165,9 +169,19 @@ vector<string> AzureBlobStorageFileSystem::Glob(const string &path, FileOpener *
 void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	auto &hfh = handle.Cast<AzureBlobStorageFileHandle>();
 
-	auto res = hfh.blob_client.GetProperties();
-	hfh.length = res.Value.BlobSize;
-	hfh.last_modified = ToTimeT(res.Value.LastModified);
+	const std::string &path = handle.path;
+	auto azure_url = ParseUrl(path);
+
+	auto entry = path_metadata_cache.find(azure_url.path);
+	if (entry != path_metadata_cache.end()) {
+		hfh.length = entry->second.file_size;
+		hfh.last_modified = entry->second.last_modified;
+	}
+	else {
+		auto res = hfh.blob_client.GetProperties();
+		hfh.length = res.Value.BlobSize;
+		hfh.last_modified = ToTimeT(res.Value.LastModified);
+	}
 }
 
 bool AzureBlobStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
