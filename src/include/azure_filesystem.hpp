@@ -53,7 +53,8 @@ public:
 	}
 
 protected:
-	AzureFileHandle(AzureStorageFileSystem &fs, string path, FileOpenFlags flags, const AzureReadOptions &read_options);
+	AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
+	                const AzureReadOptions &read_options);
 
 public:
 	FileOpenFlags flags;
@@ -99,7 +100,14 @@ public:
 	bool LoadFileInfo(AzureFileHandle &handle);
 
 protected:
-	virtual duckdb::unique_ptr<AzureFileHandle> CreateHandle(const string &path, FileOpenFlags flags,
+	unique_ptr<FileHandle> OpenFileExtended(const OpenFileInfo &info, FileOpenFlags flags,
+	                                        optional_ptr<FileOpener> opener) override;
+
+	bool SupportsOpenFileExtended() const override {
+		return true;
+	}
+
+	virtual duckdb::unique_ptr<AzureFileHandle> CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
 	                                                         optional_ptr<FileOpener> opener) = 0;
 	virtual void ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out, idx_t buffer_out_len) = 0;
 
@@ -111,6 +119,8 @@ protected:
 
 	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
 	static AzureReadOptions ParseAzureReadOptions(optional_ptr<FileOpener> opener);
+
+public:
 	static time_t ToTimeT(const Azure::DateTime &dt);
 };
 

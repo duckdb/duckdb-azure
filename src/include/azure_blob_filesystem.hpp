@@ -25,7 +25,7 @@ class AzureBlobStorageFileSystem;
 
 class AzureBlobStorageFileHandle : public AzureFileHandle {
 public:
-	AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, string path, FileOpenFlags flags,
+	AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
 	                           const AzureReadOptions &read_options, Azure::Storage::Blobs::BlobClient blob_client);
 	~AzureBlobStorageFileHandle() override = default;
 
@@ -61,7 +61,7 @@ protected:
 	}
 	shared_ptr<AzureContextState> CreateStorageContext(optional_ptr<FileOpener> opener, const string &path,
 	                                                   const AzureParsedUrl &parsed_url) override;
-	unique_ptr<AzureFileHandle> CreateHandle(const string &path, FileOpenFlags flags,
+	unique_ptr<AzureFileHandle> CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
 	                                         optional_ptr<FileOpener> opener) override;
 
 	void ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out, idx_t buffer_out_len) override;

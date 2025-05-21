@@ -68,14 +68,14 @@ AzureBlobContextState::GetBlobContainerClient(const std::string &blobContainerNa
 }
 
 //////// AzureBlobStorageFileHandle ////////
-AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, string path, FileOpenFlags flags,
-                                                       const AzureReadOptions &read_options,
+AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info,
+                                                       FileOpenFlags flags, const AzureReadOptions &read_options,
                                                        Azure::Storage::Blobs::BlobClient blob_client)
-    : AzureFileHandle(fs, std::move(path), flags, read_options), blob_client(std::move(blob_client)) {
+    : AzureFileHandle(fs, info, flags, read_options), blob_client(std::move(blob_client)) {
 }
 
 //////// AzureBlobStorageFileSystem ////////
-unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const string &path, FileOpenFlags flags,
+unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                      optional_ptr<FileOpener> opener) {
 	if (!opener) {
 		throw InternalException("Cannot do Azure storage CreateHandle without FileOpener");
@@ -83,12 +83,12 @@ unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const strin
 
 	D_ASSERT(flags.Compression() == FileCompressionType::UNCOMPRESSED);
 
-	auto parsed_url = ParseUrl(path);
-	auto storage_context = GetOrCreateStorageContext(opener, path, parsed_url);
+	auto parsed_url = ParseUrl(info.path);
+	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(parsed_url.container);
 	auto blob_client = container.GetBlockBlobClient(parsed_url.path);
 
-	auto handle = make_uniq<AzureBlobStorageFileHandle>(*this, path, flags, storage_context->read_options,
+	auto handle = make_uniq<AzureBlobStorageFileHandle>(*this, info, flags, storage_context->read_options,
 	                                                    std::move(blob_client));
 	if (!handle->PostConstruct()) {
 		return nullptr;
@@ -147,7 +147,13 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 
 			if (is_match) {
 				auto result_full_url = path_result_prefix + '/' + key.Name;
-				result.push_back(result_full_url);
+				OpenFileInfo info(result_full_url);
+				info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+				auto &options = info.extended_info->options;
+				options.emplace("file_size", Value::BIGINT(key.BlobSize));
+				options.emplace("last_modified", Value::TIMESTAMP(Timestamp::FromTimeT(
+				                                     AzureStorageFileSystem::ToTimeT(key.Details.LastModified))));
+				result.push_back(info);
 			}
 		}
 
@@ -165,9 +171,11 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	auto &hfh = handle.Cast<AzureBlobStorageFileHandle>();
 
-	auto res = hfh.blob_client.GetProperties();
-	hfh.length = res.Value.BlobSize;
-	hfh.last_modified = ToTimeT(res.Value.LastModified);
+	if (hfh.length == 0 && hfh.last_modified == 0) {
+		auto res = hfh.blob_client.GetProperties();
+		hfh.length = res.Value.BlobSize;
+		hfh.last_modified = ToTimeT(res.Value.LastModified);
+	}
 }
 
 bool AzureBlobStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {

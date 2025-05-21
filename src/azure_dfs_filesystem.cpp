@@ -63,7 +63,13 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 			} else {
 				// File
 				if (Glob(elt.Name.data(), elt.Name.length(), path_pattern.data(), path_pattern.length())) {
-					out_result->push_back(elt.Name);
+					OpenFileInfo info(elt.Name);
+					info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+					auto &options = info.extended_info->options;
+					options.emplace("file_size", Value::BIGINT(elt.FileSize));
+					options.emplace("last_modified", Value::TIMESTAMP(Timestamp::FromTimeT(
+					                                     AzureStorageFileSystem::ToTimeT(elt.LastModified))));
+					out_result->push_back(info);
 				}
 			}
 		}
@@ -88,14 +94,14 @@ AzureDfsContextState::GetDfsFileSystemClient(const std::string &file_system_name
 }
 
 //////// AzureDfsContextState ////////
-AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, string path, FileOpenFlags flags,
-                                                     const AzureReadOptions &read_options,
+AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info,
+                                                     FileOpenFlags flags, const AzureReadOptions &read_options,
                                                      Azure::Storage::Files::DataLake::DataLakeFileClient client)
-    : AzureFileHandle(fs, std::move(path), flags, read_options), file_client(std::move(client)) {
+    : AzureFileHandle(fs, info, flags, read_options), file_client(std::move(client)) {
 }
 
 //////// AzureDfsStorageFileSystem ////////
-unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const string &path, FileOpenFlags flags,
+unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
 	if (opener == nullptr) {
 		throw InternalException("Cannot do Azure storage CreateHandle without FileOpener");
@@ -103,11 +109,11 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const string
 
 	D_ASSERT(flags.Compression() == FileCompressionType::UNCOMPRESSED);
 
-	auto parsed_url = ParseUrl(path);
-	auto storage_context = GetOrCreateStorageContext(opener, path, parsed_url);
+	auto parsed_url = ParseUrl(info.path);
+	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(parsed_url.container);
 
-	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, path, flags, storage_context->read_options,
+	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->read_options,
 	                                                   file_system_client.GetFileClient(parsed_url.path));
 	if (!handle->PostConstruct()) {
 		return nullptr;
@@ -156,7 +162,7 @@ vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpe
 		                                  : (azure_url.prefix + azure_url.container)) +
 		    '/';
 		for (auto &elt : result) {
-			elt = path_result_prefix + elt.path;
+			elt.path = path_result_prefix + elt.path;
 		}
 	}
 
@@ -166,9 +172,11 @@ vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpe
 void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	auto &hfh = handle.Cast<AzureDfsStorageFileHandle>();
 
-	auto res = hfh.file_client.GetProperties();
-	hfh.length = res.Value.FileSize;
-	hfh.last_modified = ToTimeT(res.Value.LastModified);
+	if (hfh.length == 0 && hfh.last_modified == 0) {
+		auto res = hfh.file_client.GetProperties();
+		hfh.length = res.Value.FileSize;
+		hfh.last_modified = ToTimeT(res.Value.LastModified);
+	}
 }
 
 void AzureDfsStorageFileSystem::ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out,

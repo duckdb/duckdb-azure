@@ -27,7 +27,7 @@ class AzureDfsStorageFileSystem;
 
 class AzureDfsStorageFileHandle : public AzureFileHandle {
 public:
-	AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, string path, FileOpenFlags flags,
+	AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
 	                          const AzureReadOptions &read_options,
 	                          Azure::Storage::Files::DataLake::DataLakeFileClient client);
 	~AzureDfsStorageFileHandle() override = default;
@@ -61,7 +61,7 @@ protected:
 	}
 	shared_ptr<AzureContextState> CreateStorageContext(optional_ptr<FileOpener> opener, const string &path,
 	                                                   const AzureParsedUrl &parsed_url) override;
-	unique_ptr<AzureFileHandle> CreateHandle(const string &path, FileOpenFlags flags,
+	unique_ptr<AzureFileHandle> CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
 	                                         optional_ptr<FileOpener> opener) override;
 
 	void ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out, idx_t buffer_out_len) override;
