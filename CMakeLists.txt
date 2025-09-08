@@ -4,11 +4,9 @@ cmake_minimum_required(VERSION 3.5...3.29)
 set(TARGET_NAME azure)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
+set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 project(${TARGET_NAME})
 include_directories(src/include)
-
-set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
-set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(EXTENSION_SOURCES
     src/azure_extension.cpp
@@ -35,6 +33,12 @@ if(NOT ${azure-identity-cpp_FOUND}
   message(FATAL_ERROR "Azure SDK not found, did you set up vcpkg correctly?")
 endif()
 
+target_compile_features(${EXTENSION_NAME} PUBLIC cxx_std_14)
+target_compile_features(${LOADABLE_EXTENSION_NAME} PUBLIC cxx_std_14)
+set_target_properties(${EXTENSION_NAME} ${LOADABLE_EXTENSION_NAME} PROPERTIES
+    CXX_STANDARD_REQUIRED ON
+)
+
 # Static lib
 target_link_libraries(
   ${EXTENSION_NAME} Azure::azure-identity Azure::azure-storage-blobs
@@ -45,10 +49,10 @@ target_include_directories(
 
 # Loadable binary
 target_link_libraries(
-  ${TARGET_NAME}_loadable_extension Azure::azure-identity
+  ${LOADABLE_EXTENSION_NAME} Azure::azure-identity
   Azure::azure-storage-blobs Azure::azure-storage-files-datalake)
 target_include_directories(
-  ${TARGET_NAME}_loadable_extension
+  ${LOADABLE_EXTENSION_NAME}
   PRIVATE Azure::azure-identity Azure::azure-storage-blobs
           Azure::azure-storage-files-datalake)
 
