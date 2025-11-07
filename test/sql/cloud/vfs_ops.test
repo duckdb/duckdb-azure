@@ -1,0 +1,53 @@
+# name: test/sql/cloud/vfs_ops.test
+# description: test azure extension vfs ops
+# group: [cloud]
+
+# Require statement will ensure this test is run with this extension loaded
+require azure
+
+require-env AZURE_STORAGE_ACCOUNT
+
+require-env DUCKDB_AZ_DATA_DIR
+
+
+# This test only confirms that FileExists gets called (not whether it's correct),
+# in response to Issue#68 -- Since Azurite doesn't support DFS there's no local
+# way to test it.
+
+statement ok
+CREATE SECRET az1 (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
+)
+
+# NOTE: previous output, only on DFS since the container check comes from within FileExists calls:
+# D INSTALL 'abfss://foo/bar/go.duckdb_extension';
+# Not implemented Error:
+# AzureDfsStorageFileSystem: FileExists is not implemented!
+#
+# Getting output that container doesn't exist/invalid storage account confirms entry into FileExists call.
+
+statement error
+INSTALL 'az://invalid-container/dir/ext.duckdb_extension';
+----
+container does not exist
+
+
+statement error
+INSTALL 'abfss://invalid-container/dir/ext.duckdb_extension';
+----
+Cannot identify the storage account
+
+
+# NOTE: now test actual existance in az:// only -- abfss:// can only be a cloud test
+statement error
+INSTALL 'az://testing-public/non-existent.duckdb_extension';
+----
+blob does not exist
+
+statement error
+INSTALL 'az://${DUCKDB_AZ_DATA_DIR}/l.csv';
+----
+file is not a DuckDB extension
+

@@ -1,0 +1,31 @@
+# name: test/sql/cloud/glob.test
+# group: [cloud]
+
+require azure
+
+require-env AZURE_STORAGE_ACCOUNT
+
+require-env DUCKDB_AZ_DATA_DIR
+
+statement ok
+CREATE SECRET az1 (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
+);
+
+
+# Auto glob: "foo" -> "foo/**/*.csv" if foo doesn't exist via MF reader 
+query II
+SELECT l_shipmode, COUNT(*) FROM read_csv('az://${DUCKDB_AZ_DATA_DIR}/partitioned') GROUP BY l_shipmode ORDER BY l_shipmode;
+----
+AIR	2318
+SHIP	2301
+TRUCK	2317
+
+# SHOULD: Auto glob: "foo" -> "foo/**/*.csv" if foo doesn't exist
+# FAILS: Currently fails because glob support is limited and doesn't support this expr.
+statement error
+SELECT l_shipmode, COUNT(*) FROM read_csv('abfss://${DUCKDB_AZ_DATA_DIR}/partitioned') GROUP BY l_shipmode ORDER BY l_shipmode;
+----
+Not implemented Error: abfss do not manage recursive lookup patterns
