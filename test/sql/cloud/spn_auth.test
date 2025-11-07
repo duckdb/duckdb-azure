@@ -1,6 +1,6 @@
 # name: test/sql/cloud/spn_auth.test
 # description: test azure extension with service principal authentication
-# group: [azure]
+# group: [cloud]
 
 require azure
 
@@ -14,8 +14,11 @@ require-env AZURE_TENANT_ID
 
 require-env AZURE_STORAGE_ACCOUNT
 
+require-env DUCKDB_AZ_DATA_DIR
+
+
 statement error
-SELECT count(*) FROM 'azure://testing-private/l.parquet';
+SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found!
 
@@ -30,11 +33,11 @@ CREATE SECRET s1 (
 )
 
 query I
-SELECT count(*) FROM 'azure://testing-private/l.parquet';
+SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/l.parquet';
 ----
 60175
 
 query I
-FROM glob('az://testing-private/*.parquet');
+FROM glob('az://${DUCKDB_AZ_DATA_DIR}/*.parquet');
 ----
-az://testing-private/l.parquet
+az://${DUCKDB_AZ_DATA_DIR}/l.parquet

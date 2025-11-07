@@ -29,8 +29,8 @@ jobs:
 
     - name: install Azure test service
       run: |
-        sudo apt-get update -y
-        sudo apt-get install -y azure-cli squid ninja-build
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q azure-cli squid ninja-build
         npm install -g azurite
 
     - name: Launch & populate Azure test service

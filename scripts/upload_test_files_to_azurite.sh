@@ -5,16 +5,17 @@ conn_string="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountK
 
 # Create container
 az storage container create -n testing-private --connection-string "${conn_string}"
-az storage container create -n testing-public  --connection-string "${conn_string}" --public-access blob
+az storage container create -n testing-public --connection-string "${conn_string}" --public-access blob
+az storage container create -n writes --connection-string "${conn_string}"
 
 copy_file() {
   local from="${1}"
   local to="${2}"
   az storage blob upload --file "${from}" --name "${to}" --container-name "testing-private" --connection-string "${conn_string}"
-  az storage blob upload --file "${from}" --name "${to}" --container-name "testing-public"  --connection-string "${conn_string}"
+  az storage blob upload --file "${from}" --name "${to}" --container-name "testing-public" --connection-string "${conn_string}"
 }
 
 while read filepath; do
-    remote_filepath="$(echo "${filepath}" | cut -c 8-)"
-    copy_file "${filepath}" "${remote_filepath}"
+  remote_filepath="$(echo "${filepath}" | cut -c 8-)"
+  copy_file "${filepath}" "${remote_filepath}"
 done < <(find ./data -type f)

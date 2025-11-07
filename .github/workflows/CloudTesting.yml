@@ -1,5 +1,9 @@
 name: Azure (cloud) functional tests
-on: [push, repository_dispatch]
+on: 
+  push:
+    branches: [main]
+  repository_dispatch:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -16,15 +20,27 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       GEN: ninja
       DUCKDB_PLATFORM: linux_amd64
+      DUCKDB_AZ_DATA_DIR: duckdblabs-data/common/azure_data # typ. prefix az:// azure:// abfss://
 
     steps:
       - name: Install required ubuntu packages
         run: |
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq software-properties-common
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q software-properties-common
           sudo add-apt-repository ppa:git-core/ppa
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq ninja-build make gcc-multilib g++-multilib zip unzip build-essential checkinstall curl libz-dev openssh-client
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q ninja-build make gcc-multilib g++-multilib zip unzip build-essential checkinstall curl libz-dev openssh-client
+
+      - name: Setup credentials
+        uses: 1password/load-secrets-action@v3
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://testing/azure/tenant_id
+          AZURE_CLIENT_ID: op://testing/azure/client_id
+          AZURE_STORAGE_ACCOUNT: op://testing/azure/account_name
+          AZURE_CLIENT_SECRET: op://testing/azure/client_secret
 
       - uses: actions/checkout@v3
         with:
@@ -32,9 +48,13 @@ jobs:
           submodules: 'true'
 
       - name: Setup Ccache
-        uses: hendrikmuhs/ccache-action@v1.2.11 # Note: pinned due to GLIBC incompatibility in later releases
+        uses: hendrikmuhs/ccache-action@v1.2
         with:
+          variant: ccache
           key: ${{ github.job }}-${{ matrix.duckdb_arch }}
+          restore-keys: ${{ github.job }}-${{ matrix.duckdb_arch }}
+          verbose: 1
+          evict-old-files: 7d
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
@@ -48,43 +68,40 @@ jobs:
           make release
 
       - name: Test with Service Principal (SPN) in env vars
-        env:
-          AZURE_CLIENT_ID: ${{secrets.AZURE_CLIENT_ID}}
-          AZURE_CLIENT_SECRET: ${{secrets.AZURE_CLIENT_SECRET}}
-          AZURE_TENANT_ID: ${{secrets.AZURE_TENANT_ID}}
-          AZURE_STORAGE_ACCOUNT: ${{secrets.AZURE_STORAGE_ACCOUNT}}
         run: |
-          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "*test/sql/cloud/*"
+          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "test/sql/cloud/*"
 
       - name: Test with SPN logged in in azure-cli
         env:
-          AZURE_STORAGE_ACCOUNT: ${{secrets.AZURE_STORAGE_ACCOUNT}}
           DUCKDB_AZ_CLI_LOGGED_IN: 1
+
         run: |
-          az login --service-principal -u ${{secrets.AZURE_CLIENT_ID}} -p ${{secrets.AZURE_CLIENT_SECRET}} --tenant ${{secrets.AZURE_TENANT_ID}}
-          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "*test/sql/cloud/*"
+          az login --service-principal --user="${AZURE_CLIENT_ID}" --password="${AZURE_CLIENT_SECRET}" --tenant="${AZURE_TENANT_ID}"
+          unset AZURE_CLIENT_SECRET # prevent env usage going forward
+          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "test/sql/cloud/*"
 
       - name: Test with access token
-        env:
-          AZURE_STORAGE_ACCOUNT: ${{secrets.AZURE_STORAGE_ACCOUNT}}
         run: |
-          az login --service-principal -u ${{secrets.AZURE_CLIENT_ID}} -p ${{secrets.AZURE_CLIENT_SECRET}} --tenant ${{secrets.AZURE_TENANT_ID}}
           export AZURE_ACCESS_TOKEN=`az account get-access-token --resource https://storage.azure.com --query accessToken --output tsv`
-          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "*test/sql/cloud/*"
+          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "test/sql/cloud/*"
 
-      - name: Log out azure-cli
+      - name: Clean credentials
         if: always()
         run: |
-          az logout
+          az logout || true # don't fail cuz of this
 
       - name: Tests that focus on public non-authenticated requests
         env:
-          AZURE_STORAGE_ACCOUNT: ${{secrets.AZURE_STORAGE_ACCOUNT}}
           DUCKDB_AZURE_PUBLIC_CONTAINER_AVAILABLE: 1
+          DUCKDB_AZ_DATA_DIR: # disable
+          AZURE_CLIENT_SECRET: # disable
+          # TODO: rename this secret to PUBLIC_AZURE_STORAGE_ACCOUNT
+          AZURE_STORAGE_ACCOUNT: duckdbtesting
+      
         run: |
-          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "*test/sql/cloud/*"
+          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "test/sql/cloud/unauthenticated"
 
       - name: Run test data integrity check
         run: |
           ./build/release/duckdb -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE,PROVIDER SERVICE_PRINCIPAL, TENANT_ID '${{secrets.AZURE_TENANT_ID}}', CLIENT_ID '${{secrets.AZURE_CLIENT_ID}}', CLIENT_SECRET '${{secrets.AZURE_CLIENT_SECRET}}',ACCOUNT_NAME '${{secrets.AZURE_STORAGE_ACCOUNT}}')"
-          DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 ./build/release/test/unittest "*test/sql/test_data_integrity.test"
+          DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 ./build/release/test/unittest "test/sql/test_data_integrity.test"

@@ -1,6 +1,6 @@
-# name: test/sql/hierarchical_namespace.test
+# name: test/sql/cloud/hierarchical_namespace.test
 # description: test azure extension with ADLS GEN2 storage
-# group: [azure]
+# group: [cloud]
 
 # Require statement will ensure this test is run with this extension loaded
 require azure
@@ -12,6 +12,9 @@ require-env AZURE_CLIENT_ID
 require-env AZURE_CLIENT_SECRET
 
 require-env AZURE_STORAGE_ACCOUNT
+
+require-env DUCKDB_AZ_DATA_DIR
+
 
 statement ok
 set allow_persistent_secrets=false
@@ -28,87 +31,88 @@ CREATE SECRET spn (
 
 # Check that with Azure ADLS GEN2 directories are not show in globs
 query I
-SELECT file FROM glob('abfss://testing-private/**') ORDER BY file;
+SELECT file FROM glob('abfss://${DUCKDB_AZ_DATA_DIR}/**') ORDER BY file;
 ----
-abfss://testing-private/README.md
-abfss://testing-private/l.csv
-abfss://testing-private/l.parquet
-abfss://testing-private/lineitem.csv
-abfss://testing-private/partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
-abfss://testing-private/partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
-abfss://testing-private/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
-abfss://testing-private/partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
-abfss://testing-private/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
-abfss://testing-private/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/README.md
+abfss://${DUCKDB_AZ_DATA_DIR}/l.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/l.parquet
+abfss://${DUCKDB_AZ_DATA_DIR}/lineitem.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
+abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
 # Check data integrity for Azure ADLS GEN2 storage account
 statement error
-SELECT file FROM glob('abfss://testing-private/**/*.csv') ORDER BY file;
+SELECT file FROM glob('abfss://${DUCKDB_AZ_DATA_DIR}/**/*.csv') ORDER BY file;
 ----
-Not implemented Error: abfss do not manage recursive lookup patterns, **/*.csv is therefor illegal, only pattern ending by ** are allowed.
+<REGEX>:.*Not implemented Error:.*abfss.*recursive lookup patterns.*
 
 query I
-SELECT count(*) FROM 'abfss://testing-private/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
 ----
 2317
 
 query I
-SELECT count(*) FROM 'abfss://testing-private/partitioned/l_receipmonth=*/l_shipmode=*/*.csv';
+SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=*/*.csv';
 ----
 6936
 
 # Check with absolute path
 query I
-SELECT count(*) FROM 'abfss://testing-private/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
+SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
 ----
 1291
 
 # Check with absolute path using unsecure abfs
 query I
-SELECT count(*) FROM 'abfs://testing-private/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
+SELECT count(*) FROM 'abfs://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
 ----
 1291
 
 # Check fully qualified name
 query I
-SELECT count(*) FROM 'abfss://${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/testing-private/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM 'abfss://${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
 ----
 2317
 
 # Check fully qualified name using unsecure abfs
 query I
-SELECT count(*) FROM 'abfs://${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/testing-private/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM 'abfs://${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
 ----
 2317
 
-# Check fully qualified name abfss alternative syntax
+foreach proto abfs:// abfss://
+
+# Check fully qualified name abfs[s] alternative syntax
 query I
-SELECT count(*) FROM 'abfss://testing-private@${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM read_csv(
+  '${proto}' || parse_dirname('${DUCKDB_AZ_DATA_DIR}') || '@${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/' 
+  || array_to_string(parse_path('${DUCKDB_AZ_DATA_DIR}')[2:], '/') || '/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv'
+);
 ----
 2317
 
-# Check fully qualified name abfs alternative syntax
-query I
-SELECT count(*) FROM 'abfs://testing-private@${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
-----
-2317
+endloop
 
 # Enable http info for the explain analyze statement
 statement ok
 SET azure_http_stats = true;
 
 query II
-EXPLAIN ANALYZE SELECT count(*) FROM 'abfss://testing-private/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
+EXPLAIN ANALYZE SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 322\.0 KiB.*\#HEAD\: 1.*GET\: 4.*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 4.*PUT\: 0.*\#POST\: 0.*
 
 query II
-EXPLAIN ANALYZE SELECT count(*) FROM 'abfs://testing-private/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
+EXPLAIN ANALYZE SELECT count(*) FROM 'abfs://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 322\.0 KiB.*\#HEAD\: 1.*GET\: 4.*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 4.*PUT\: 0.*\#POST\: 0.*
 
 
 query II
-EXPLAIN ANALYZE SELECT count(*) FROM 'azure://testing-private/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
+EXPLAIN ANALYZE SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 330\.1 KiB.*\#HEAD\: 1.*GET\: 2.*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 2.*PUT\: 0.*\#POST\: 0.*
