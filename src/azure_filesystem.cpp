@@ -52,17 +52,23 @@ bool AzureFileHandle::PostConstruct() {
 }
 
 bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
-	if (handle.flags.OpenForReading()) {
+	// Load remote info when reading or anything resembling existence is checked; since
+	// we operate read only here, that's pretty much all the time.
+	const auto &flags = handle.flags;
+	if (flags.OpenForReading() || flags.ReturnNullIfExists() || flags.ReturnNullIfNotExists()) {
 		try {
 			LoadRemoteFileInfo(handle);
+			if (flags.ReturnNullIfExists()) {
+				return false;
+			}
 		} catch (const Azure::Storage::StorageException &e) {
 			auto status_code = int(e.StatusCode);
 			if (status_code == 404 && handle.flags.ReturnNullIfNotExists()) {
 				return false;
 			}
-			throw IOException(
-			    "AzureBlobStorageFileSystem open file '%s' failed with code'%s', Reason Phrase: '%s', Message: '%s'",
-			    handle.path, e.ErrorCode, e.ReasonPhrase, e.Message);
+			throw IOException("AzureBlobStorageFileSystem open file '%s' failed with code'%s', Reason Phrase: "
+			                  "'%s', Message: '%s'",
+			                  handle.path, e.ErrorCode, e.ReasonPhrase, e.Message);
 		} catch (const std::exception &e) {
 			throw IOException(
 			    "AzureBlobStorageFileSystem could not open file: '%s', unknown error occurred, this could mean "
@@ -77,7 +83,7 @@ unique_ptr<FileHandle> AzureStorageFileSystem::OpenFileExtended(const OpenFileIn
                                                                 optional_ptr<FileOpener> opener) {
 	D_ASSERT(flags.Compression() == FileCompressionType::UNCOMPRESSED);
 
-	if (flags.OpenForWriting()) {
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
 		throw NotImplementedException("Writing to Azure containers is currently not supported");
 	}
 

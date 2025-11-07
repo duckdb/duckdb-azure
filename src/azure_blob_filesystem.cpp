@@ -111,7 +111,11 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 	// Azure matches on prefix, not glob pattern, so we take a substring until the first wildcard
 	auto first_wildcard_pos = azure_url.path.find_first_of("*[\\");
 	if (first_wildcard_pos == string::npos) {
-		return {path};
+		vector<OpenFileInfo> rv;
+		if (FileExists(path, opener)) {
+			rv.emplace_back(path);
+		}
+		return rv;
 	}
 
 	string shared_path = azure_url.path.substr(0, first_wildcard_pos);

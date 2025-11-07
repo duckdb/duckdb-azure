@@ -35,6 +35,7 @@ public:
 
 public:
 	Azure::Storage::Files::DataLake::DataLakeFileClient file_client;
+	bool is_directory;
 };
 
 class AzureDfsStorageFileSystem : public AzureStorageFileSystem {

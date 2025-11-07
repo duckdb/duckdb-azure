@@ -79,3 +79,12 @@ az://testing-public/README.md
 az://testing-public/l.csv
 az://testing-public/l.parquet
 az://testing-public/lineitem.csv
+
+# Auto glob: ".../partitioned" -> ".../partitioned/*" via read_csv (and other multi file readers)
+query II
+SELECT l_shipmode, COUNT(*) FROM read_csv('az://testing-public/partitioned') GROUP BY l_shipmode ORDER BY l_shipmode;
+----
+AIR	2318
+SHIP	2301
+TRUCK	2317
+
