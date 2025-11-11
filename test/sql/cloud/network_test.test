@@ -6,16 +6,18 @@ require azure
 
 require parquet
 
-require-env AZURE_STORAGE_ACCOUNT
+require-env AZ_STORAGE_ACCOUNT
 
-require-env DUCKDB_AZ_DATA_DIR
+require-env AZ_DATA_DIR
+
+require-env AZURE_AUTH_ENV 1
 
 
 statement ok
 set allow_persistent_secrets=false
 
 statement error
-SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'az://${AZ_DATA_DIR}/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found!
 
@@ -23,8 +25,7 @@ statement ok
 CREATE SECRET az1 (
     TYPE AZURE,
     PROVIDER CREDENTIAL_CHAIN,
-    CHAIN 'env;cli',
-    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
 )
 
 # Enable http info for the explain analyze statement
@@ -32,12 +33,12 @@ statement ok
 SET azure_http_stats = true;
 
 query II
-EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://${AZ_DATA_DIR}/l.parquet';
 ----
 analyzed_plan	<REGEX>:.*HTTP Stats.*in\: \d[.]\d MiB.*\#HEAD\: [23].*GET\: [0-3].*PUT\: 0.*\#POST\: 0.*
 
 # Redoing query should still result in same request count
 query II
-EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://${AZ_DATA_DIR}/l.parquet';
 ----
 analyzed_plan	<REGEX>:.*HTTP Stats.*in\: \d[.]\d MiB.*\#HEAD\: [23].*GET\: [0-3].*PUT\: 0.*\#POST\: 0.*

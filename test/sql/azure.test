@@ -1,6 +1,6 @@
 # name: test/sql/azure.test
 # description: test azure extension
-# group: [azure]
+# group: [sql]
 
 # Require statement will ensure this test is run with this extension loaded
 require azure

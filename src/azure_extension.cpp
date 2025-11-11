@@ -90,5 +90,4 @@ extern "C" {
 DUCKDB_CPP_EXTENSION_ENTRY(azure, loader) {
 	duckdb::LoadInternal(loader);
 }
-
 }

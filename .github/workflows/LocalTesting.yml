@@ -1,3 +1,4 @@
+
 name: Azurite (local) functional tests
 on: [push, pull_request,repository_dispatch]
 concurrency:
@@ -16,8 +17,11 @@ jobs:
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
-      AZURE_STORAGE_ACCOUNT: devstoreaccount1
       HTTP_PROXY_RUNNING: '1'
+      # AZ protocol vars
+      AZ_STORAGE_ACCOUNT: devstoreaccount1
+      AZ_DATA_DIR: testing-private
+      AZ_TEMP_DIR: writes
 
     steps:
     - uses: actions/checkout@v4
@@ -45,6 +49,16 @@ jobs:
       uses: lukka/run-vcpkg@v11.1
       with:
         vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+
+    - &ccache
+      name: Add ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        variant: ccache
+        key: ${{ github.job }}-${{ matrix.duckdb_arch }}
+        restore-keys: ${{ github.job }}-${{ matrix.duckdb_arch }}
+        verbose: 1
+        evict-old-files: 7d
 
     # Build extension
     - name: Build extension
@@ -75,6 +89,10 @@ jobs:
         echo "## squid auth"
         sudo cat squid_auth_logs/*
 
+    #- name: Setup tmate session
+    #  if: ${{ failure() }}
+    #  uses: mxschmitt/action-tmate@v3
+
   azurite-tests-macos:
     name: Azurite tests (MacOS)
     runs-on: macos-latest
@@ -84,7 +102,10 @@ jobs:
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
-      AZURE_STORAGE_ACCOUNT: devstoreaccount1
+      # AZ protocol vars
+      AZ_STORAGE_ACCOUNT: devstoreaccount1
+      AZ_DATA_DIR: testing-private
+      AZ_TEMP_DIR: writes
 
     steps:
       - uses: actions/checkout@v3
@@ -95,12 +116,6 @@ jobs:
       - name: Install Ninja
         run: brew install ninja
 
-      - name: Setup Ccache
-        uses: hendrikmuhs/ccache-action@main
-        with:
-          key: ${{ github.job }}
-          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb_azure' }}
-
       - uses: actions/setup-python@v2
         with:
           python-version: '3.11'
@@ -109,6 +124,8 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+
+      - *ccache
 
       - name: Build extension
         shell: bash
@@ -140,6 +157,10 @@ jobs:
           echo "## azurite"
           cat azurite_log.txt
 
+      #- name: Setup tmate session
+      #  if: ${{ failure() }}
+      #  uses: mxschmitt/action-tmate@v3
+
   azurite-tests-windows:
     name: Azurite tests (Windows)
     runs-on: windows-latest
@@ -148,7 +169,10 @@ jobs:
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
       AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
-      AZURE_STORAGE_ACCOUNT: devstoreaccount1
+      # AZ protocol vars
+      AZ_STORAGE_ACCOUNT: devstoreaccount1
+      AZ_DATA_DIR: testing-private
+      AZ_TEMP_DIR: writes
 
     steps:
       - uses: actions/checkout@v3
@@ -164,6 +188,15 @@ jobs:
       - uses: actions/setup-python@v2
         with:
           python-version: '3.11'
+
+      - &sccache
+        name: Add sccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: ${{ github.job }}-${{ matrix.duckdb_arch }}
+          restore-keys: ${{ github.job }}-${{ matrix.duckdb_arch }}
+          verbose: 1
 
       - name: Build extension
         run: |
@@ -194,3 +227,7 @@ jobs:
         shell: bash
         run: |
           cat azurite_log.txt
+
+      #- name: Setup tmate session
+      #  if: ${{ failure() }}
+      #  uses: mxschmitt/action-tmate@v3

@@ -67,8 +67,8 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 					info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 					auto &options = info.extended_info->options;
 					options.emplace("file_size", Value::BIGINT(elt.FileSize));
-					options.emplace("last_modified", Value::TIMESTAMP(
-					                                     AzureStorageFileSystem::ToTimestamp(elt.LastModified)));
+					options.emplace("last_modified",
+					                Value::TIMESTAMP(AzureStorageFileSystem::ToTimestamp(elt.LastModified)));
 					out_result->push_back(info);
 				}
 			}
@@ -103,11 +103,21 @@ AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &
 //////// AzureDfsStorageFileSystem ////////
 unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
-	if (opener == nullptr) {
-		throw InternalException("Cannot do Azure storage CreateHandle without FileOpener");
+	if (!opener) {
+		throw InternalException("Unsupported(INTERNAL): cannot create an Azure file Handle without FileOpener");
 	}
-
-	D_ASSERT(flags.Compression() == FileCompressionType::UNCOMPRESSED);
+	if (flags.Compression() != FileCompressionType::UNCOMPRESSED) {
+		throw InternalException("Unsupported(INTERNAL): cannot open an Azure file in compressed mode");
+	}
+	if (flags.OpenForWriting()) {
+		throw NotImplementedException("Unsupported: cannot open an Azure file in write mode");
+	}
+	if (flags.OpenForAppending()) {
+		throw NotImplementedException("Unsupported: cannot open an Azure file in append mode");
+	}
+	if (flags.OpenForReading() && (flags.OpenForWriting() || flags.OpenForAppending())) {
+		throw NotImplementedException("Unsupported: cannot open an Azure file in read+write mode");
+	}
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
@@ -126,12 +136,12 @@ bool AzureDfsStorageFileSystem::CanHandleFile(const string &fpath) {
 }
 
 bool AzureDfsStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
-  auto handle = OpenFile(filename, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
-  if (handle != nullptr) {
-    auto &sfh = handle->Cast<AzureDfsStorageFileHandle>();
-    return sfh.length >= 0; // aka return true; -- avoid optimizers and shenanigans -- deref handle to be sure
-  }
-  return false;
+	auto handle = OpenFile(filename, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
+	if (handle != nullptr) {
+		auto &sfh = handle->Cast<AzureDfsStorageFileHandle>();
+		return sfh.length >= 0; // aka return true; -- avoid optimizers and shenanigans -- deref handle to be sure
+	}
+	return false;
 }
 
 vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpener *opener) {

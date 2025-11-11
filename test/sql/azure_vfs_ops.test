@@ -1,7 +1,6 @@
-
 # name: test/sql/azure_vfs_ops.test
 # description: test azure extension vfs ops
-# group: [azure]
+# group: [sql]
 
 # Require statement will ensure this test is run with this extension loaded
 require azure

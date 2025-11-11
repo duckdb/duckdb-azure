@@ -1,6 +1,6 @@
-# name: test/sql/azure_proxy.test
+# name: test/sql/proxy/azure_proxy.test
 # description: test azure extension with a simple proxy
-# group: [azure]
+# group: [proxy]
 
 require azure
 
