@@ -1,0 +1,65 @@
+{
+  "description": "Run DuckDB Tests with Azure Blob Storage as Data source and Temp storage",
+  "data_dir": "az://duckdblabs-data/common/duckdb_data",
+  "temp_dir_base": "az://duckdblabs-write-testing/extension/azure",
+  "on_init": "LOAD '{BUILD_DIR}/extension/azure/azure.duckdb_extension'; CREATE OR REPLACE SECRET ( TYPE azure, PROVIDER credential_chain, CHAIN 'env;cli', ACCOUNT_NAME 'duckdblabstestdatablob' );",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "azure"
+  ],
+  "skip_tests": [
+    {
+      "reason": "incompatible with azure create secret",
+      "paths": [
+        "test/sql/secrets/create_secret_persistence_no_client_context.test"
+      ]
+    },
+    {
+      "reason": "extension autoloads / incompatibility for azure",
+      "paths": [
+        "test/sql/catalog/test_extension_suggestion.test"
+      ]
+    },
+    {
+      "reason": "azure glob support inconsistencies: no ?",
+      "paths": [
+        "test/sql/copy/csv/csv_glob_fallback.test",
+        "test/sql/copy/csv/read_csv_variable.test",
+        "test/sql/copy/csv/glob/copy_csv_glob.test",
+        "test/sql/copy/csv/glob/read_csv_glob.test",
+        "test/sql/copy/parquet/parquet_glob.test",
+        "test/sql/copy/parquet/parallel_parquet_glob.test",
+        "test/sql/copy/format_uuid.test"
+      ]
+    },
+    {
+      "reason": "no overwrites in remote",
+      "paths": [
+        "test/sql/copy/csv/overwrite/test_copy_overwrite.test",
+        "test/sql/copy/partitioned/hive_partitioned_auto_detect.test"
+      ]
+    },
+    {
+      "reason": "no overwrites in remote (removeable?)",
+      "paths": [
+        "test/sql/copy/parquet/parquet_hive_null.test",
+        "test/sql/copy/partitioned/hive_partition_escape.test",
+        "test/sql/copy/partitioned/skip_partition_column_writes.test",
+        "test/sql/copy/return_stats.test"
+      ]
+    },
+    {
+      "reason": "implicit overwrite, needs investigation",
+      "paths": [
+        "test/sql/copy/parquet/writer/test_copy_overwrite_parquet.test"
+      ]
+    },
+    {
+      "reason": "skip azure for logging, home, etc",
+      "paths": [
+        "test/sql/copy/csv/csv_home_directory.test"
+      ]
+    }
+  ]
+}

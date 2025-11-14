@@ -6,7 +6,7 @@ require azure
 
 require-env AZURE_STORAGE_CONNECTION_STRING
 
-require-env AZURE_STORAGE_ACCOUNT
+require-env AZ_STORAGE_ACCOUNT
 
 # Define secrets
 statement ok
@@ -18,7 +18,7 @@ CREATE SECRET s1 (
 statement ok
 CREATE SECRET s2 (
     TYPE AZURE,
-    SCOPE 'azure://${AZURE_STORAGE_ACCOUNT}.blob.core.windows.net',
+    SCOPE 'azure://${AZ_STORAGE_ACCOUNT}.blob.core.windows.net',
     CONNECTION_STRING 'INVALID CONNECTION STRING'
 )
 
@@ -26,20 +26,20 @@ CREATE SECRET s2 (
 statement ok
 CREATE SECRET s3 (
     TYPE AZURE,
-    SCOPE 'azure://${AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private',
+    SCOPE 'azure://${AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private',
     CONNECTION_STRING '${AZURE_STORAGE_CONNECTION_STRING}'
 )
 
 # Ensure that the right secret is choose
 query I
-SELECT count(*) FROM 'azure://${AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/lineitem.csv';
+SELECT count(*) FROM 'azure://${AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/lineitem.csv';
 ----
 60175
 
 
 # Ensure that the right secret is choose using wildcard
 query I
-SELECT count(*) FROM 'azure://${AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/li*.csv';
+SELECT count(*) FROM 'azure://${AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/li*.csv';
 ----
 60175
 
@@ -59,6 +59,6 @@ SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}'
 
 # Now the wildcard scope should match
 query I
-SELECT count(*) FROM 'azure://${AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/testing-public/lineitem.csv';
+SELECT count(*) FROM 'azure://${AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-public/lineitem.csv';
 ----
 60175

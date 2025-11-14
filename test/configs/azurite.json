@@ -1,0 +1,19 @@
+{
+  "description": "Run DuckDB Tests with Azurite Blob Storage as Data source and Temp storage",
+  "init_script": "test/configs/auth_azurite.sql",
+  "test_env": [
+    {
+      "env_name": "AZ_DATA_DIR",
+      "env_value": "testing-private"
+    },
+    {
+      "env_name": "AZ_TEMP_DIR",
+      "env_value": "writes"
+    }
+  ],
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "azure"
+  ]
+}

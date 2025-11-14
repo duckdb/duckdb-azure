@@ -6,9 +6,15 @@ require azure
 
 require parquet
 
-require-env AZURE_STORAGE_ACCOUNT
+require-env AZ_STORAGE_ACCOUNT
 
-require-env DUCKDB_AZ_DATA_DIR
+require-env AZ_DATA_DIR
+
+require-env ABFSS_STORAGE_ACCOUNT
+
+require-env ABFSS_DATA_DIR
+
+require-env AZURE_AUTH_ENV 1
 
 
 statement ok
@@ -18,11 +24,26 @@ statement ok
 CREATE SECRET az1 (
     TYPE AZURE,
     PROVIDER CREDENTIAL_CHAIN,
-    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
 )
 
 query I nosort r1
-FROM 'azure://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+FROM 'az://${AZ_DATA_DIR}/l.parquet';
+
+query I nosort r1
+FROM './data/l.parquet'
+
+
+
+statement ok
+CREATE SECRET abfss1 (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}'
+)
+
+query I nosort r1
+FROM 'az://${ABFSS_DATA_DIR}/l.parquet';
 
 query I nosort r1
 FROM './data/l.parquet'

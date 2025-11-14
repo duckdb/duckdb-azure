@@ -1,0 +1,70 @@
+# name: test/sql/azure_writes.test
+# description: test azure extension writes
+# group: [sql]
+
+require azure
+
+require parquet
+
+require-env AZ_TEMP_DIR
+
+require-env AZ_STORAGE_ACCOUNT
+
+require-env AZURE_AUTH_ENV 1
+
+statement ok
+CREATE SECRET az1 (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
+)
+
+## Basic write & read
+query I
+COPY (SELECT id: 42) TO 'az://${AZ_TEMP_DIR}/write-id-42.csv';
+----
+1
+
+query I
+SELECT id FROM 'az://${AZ_TEMP_DIR}/write-id-42.csv';
+----
+42
+
+# load lineitem in memory for some copies
+statement ok
+CREATE TABLE lineitem AS FROM './data/l.parquet';
+
+# check source query
+query I
+SELECT sum(l_orderkey) FROM lineitem;
+----
+1802759573
+
+# Copy to CSV
+statement ok
+COPY lineitem
+TO 'az://${AZ_TEMP_DIR}/lineitem-copied.csv';
+
+# ... and confirm result from copy
+query I
+SELECT sum(l_orderkey) FROM 'az://${AZ_TEMP_DIR}/lineitem-copied.csv';
+----
+1802759573
+
+# Copy to parquet with a couple partitions
+statement ok
+COPY lineitem
+TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
+	FORMAT 'parquet',
+	PARTITION_BY (l_linestatus)
+);
+
+# and confirm result from copy
+query I
+SELECT sum(l_orderkey) 
+FROM read_parquet(
+	'az://${AZ_TEMP_DIR}/lineitem-partitioned/*/*.parquet', 
+	HIVE_PARTITIONING = true
+)
+----
+1802759573

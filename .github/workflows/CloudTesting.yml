@@ -20,7 +20,13 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       GEN: ninja
       DUCKDB_PLATFORM: linux_amd64
-      DUCKDB_AZ_DATA_DIR: duckdblabs-data/common/azure_data # typ. prefix az:// azure:// abfss://
+      # AZ protocol vars
+      AZ_STORAGE_ACCOUNT: duckdblabstestdatablob
+      AZ_DATA_DIR: duckdblabs-data/common/azure_data
+      AZ_TEMP_DIR: duckdblabs-write-testing/extension/azure
+      # ABFSS protocol vars
+      ABFSS_STORAGE_ACCOUNT: duckdblabstestdata
+      ABFSS_DATA_DIR: duckdblabs-data/common/azure_data
 
     steps:
       - name: Install required ubuntu packages
@@ -39,8 +45,8 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           AZURE_TENANT_ID: op://testing/azure/tenant_id
           AZURE_CLIENT_ID: op://testing/azure/client_id
-          AZURE_STORAGE_ACCOUNT: op://testing/azure/account_name
           AZURE_CLIENT_SECRET: op://testing/azure/client_secret
+          AZURE_AUTH_ENV: 1
 
       - uses: actions/checkout@v3
         with:
@@ -83,7 +89,7 @@ jobs:
       - name: Test with access token
         run: |
           export AZURE_ACCESS_TOKEN=`az account get-access-token --resource https://storage.azure.com --query accessToken --output tsv`
-          python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "test/sql/cloud/*"
+          ./build/release/test/unittest "test/sql/cloud/access_token_auth.test"
 
       - name: Clean credentials
         if: always()
@@ -93,15 +99,16 @@ jobs:
       - name: Tests that focus on public non-authenticated requests
         env:
           DUCKDB_AZURE_PUBLIC_CONTAINER_AVAILABLE: 1
-          DUCKDB_AZ_DATA_DIR: # disable
-          AZURE_CLIENT_SECRET: # disable
-          # TODO: rename this secret to PUBLIC_AZURE_STORAGE_ACCOUNT
-          AZURE_STORAGE_ACCOUNT: duckdbtesting
+          PUBLIC_AZ_STORAGE_ACCOUNT: duckdbtesting
       
         run: |
           python3 duckdb/scripts/run_tests_one_by_one.py ./build/release/test/unittest "test/sql/cloud/unauthenticated"
 
       - name: Run test data integrity check
         run: |
-          ./build/release/duckdb -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE,PROVIDER SERVICE_PRINCIPAL, TENANT_ID '${{secrets.AZURE_TENANT_ID}}', CLIENT_ID '${{secrets.AZURE_CLIENT_ID}}', CLIENT_SECRET '${{secrets.AZURE_CLIENT_SECRET}}',ACCOUNT_NAME '${{secrets.AZURE_STORAGE_ACCOUNT}}')"
+          ./build/release/duckdb -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, PROVIDER SERVICE_PRINCIPAL, TENANT_ID '${{secrets.AZURE_TENANT_ID}}', CLIENT_ID '${{secrets.AZURE_CLIENT_ID}}', CLIENT_SECRET '${{secrets.AZURE_CLIENT_SECRET}}', ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}')"
           DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 ./build/release/test/unittest "test/sql/test_data_integrity.test"
+
+      #- name: Setup tmate session
+      #  if: ${{ failure() }}
+      #  uses: mxschmitt/action-tmate@v3

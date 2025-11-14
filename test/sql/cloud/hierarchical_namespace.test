@@ -11,9 +11,9 @@ require-env AZURE_CLIENT_ID
 
 require-env AZURE_CLIENT_SECRET
 
-require-env AZURE_STORAGE_ACCOUNT
+require-env ABFSS_STORAGE_ACCOUNT
 
-require-env DUCKDB_AZ_DATA_DIR
+require-env ABFSS_DATA_DIR
 
 
 statement ok
@@ -26,61 +26,61 @@ CREATE SECRET spn (
     TENANT_ID '${AZURE_TENANT_ID}',
     CLIENT_ID '${AZURE_CLIENT_ID}',
     CLIENT_SECRET '${AZURE_CLIENT_SECRET}',
-    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}'
 );
 
 # Check that with Azure ADLS GEN2 directories are not show in globs
 query I
-SELECT file FROM glob('abfss://${DUCKDB_AZ_DATA_DIR}/**') ORDER BY file;
+SELECT file FROM glob('abfss://${ABFSS_DATA_DIR}/**') ORDER BY file;
 ----
-abfss://${DUCKDB_AZ_DATA_DIR}/README.md
-abfss://${DUCKDB_AZ_DATA_DIR}/l.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/l.parquet
-abfss://${DUCKDB_AZ_DATA_DIR}/lineitem.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
-abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
+abfss://${ABFSS_DATA_DIR}/README.md
+abfss://${ABFSS_DATA_DIR}/l.csv
+abfss://${ABFSS_DATA_DIR}/l.parquet
+abfss://${ABFSS_DATA_DIR}/lineitem.csv
+abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
+abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
+abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
+abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
+abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
+abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
 # Check data integrity for Azure ADLS GEN2 storage account
 statement error
-SELECT file FROM glob('abfss://${DUCKDB_AZ_DATA_DIR}/**/*.csv') ORDER BY file;
+SELECT file FROM glob('abfss://${ABFSS_DATA_DIR}/**/*.csv') ORDER BY file;
 ----
 <REGEX>:.*Not implemented Error:.*abfss.*recursive lookup patterns.*
 
 query I
-SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM 'abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
 ----
 2317
 
 query I
-SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=*/*.csv';
+SELECT count(*) FROM 'abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=*/*.csv';
 ----
 6936
 
 # Check with absolute path
 query I
-SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
+SELECT count(*) FROM 'abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
 ----
 1291
 
 # Check with absolute path using unsecure abfs
 query I
-SELECT count(*) FROM 'abfs://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
+SELECT count(*) FROM 'abfs://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv';
 ----
 1291
 
 # Check fully qualified name
 query I
-SELECT count(*) FROM 'abfss://${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM 'abfss://${ABFSS_STORAGE_ACCOUNT}.dfs.core.windows.net/${ABFSS_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
 ----
 2317
 
 # Check fully qualified name using unsecure abfs
 query I
-SELECT count(*) FROM 'abfs://${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
+SELECT count(*) FROM 'abfs://${ABFSS_STORAGE_ACCOUNT}.dfs.core.windows.net/${ABFSS_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
 ----
 2317
 
@@ -89,8 +89,8 @@ foreach proto abfs:// abfss://
 # Check fully qualified name abfs[s] alternative syntax
 query I
 SELECT count(*) FROM read_csv(
-  '${proto}' || parse_dirname('${DUCKDB_AZ_DATA_DIR}') || '@${AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/' 
-  || array_to_string(parse_path('${DUCKDB_AZ_DATA_DIR}')[2:], '/') || '/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv'
+  '${proto}' || parse_dirname('${ABFSS_DATA_DIR}') || '@${ABFSS_STORAGE_ACCOUNT}.dfs.core.windows.net/' 
+  || array_to_string(parse_path('${ABFSS_DATA_DIR}')[2:], '/') || '/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv'
 );
 ----
 2317
@@ -102,17 +102,16 @@ statement ok
 SET azure_http_stats = true;
 
 query II
-EXPLAIN ANALYZE SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
+EXPLAIN ANALYZE SELECT count(*) FROM 'abfss://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
 analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 4.*PUT\: 0.*\#POST\: 0.*
 
 query II
-EXPLAIN ANALYZE SELECT count(*) FROM 'abfs://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
+EXPLAIN ANALYZE SELECT count(*) FROM 'abfs://${ABFSS_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
 analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 4.*PUT\: 0.*\#POST\: 0.*
 
-
-query II
-EXPLAIN ANALYZE SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
-----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 2.*PUT\: 0.*\#POST\: 0.*
+#query II
+#EXPLAIN ANALYZE SELECT count(*) FROM 'azure://${AZ_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
+#----
+#analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: 2.*PUT\: 0.*\#POST\: 0.*
