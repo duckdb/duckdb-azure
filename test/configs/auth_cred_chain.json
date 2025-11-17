@@ -1,0 +1,14 @@
+{
+  "description": "Run DuckDB Tests with DuckDB Labs Azure Storage Auth",
+  "test_env": [
+    {
+      "env_name": "AZ_SECRET_SAUCE",
+      "env_value": "PROVIDER credential_chain,"
+    }
+  ],
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "azure"
+  ]
+}

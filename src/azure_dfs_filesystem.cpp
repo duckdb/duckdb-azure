@@ -103,11 +103,21 @@ AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &
 //////// AzureDfsStorageFileSystem ////////
 unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
-	if (opener == nullptr) {
-		throw InternalException("Cannot do Azure storage CreateHandle without FileOpener");
+	if (!opener) {
+		throw InternalException("Unsupported(INTERNAL): cannot create an Azure file Handle without FileOpener");
 	}
-
-	D_ASSERT(flags.Compression() == FileCompressionType::UNCOMPRESSED);
+	if (flags.Compression() != FileCompressionType::UNCOMPRESSED) {
+		throw InternalException("Unsupported(INTERNAL): cannot open an Azure file in compressed mode");
+	}
+	if (flags.OpenForWriting()) {
+		throw NotImplementedException("Unsupported: cannot open an Azure file in write mode");
+	}
+	if (flags.OpenForAppending()) {
+		throw NotImplementedException("Unsupported: cannot open an Azure file in append mode");
+	}
+	if (flags.OpenForReading() && (flags.OpenForWriting() || flags.OpenForAppending())) {
+		throw NotImplementedException("Unsupported: cannot open an Azure file in read+write mode");
+	}
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);

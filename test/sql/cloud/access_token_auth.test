@@ -8,15 +8,19 @@ require parquet
 
 require-env AZURE_ACCESS_TOKEN
 
-require-env AZURE_STORAGE_ACCOUNT
+require-env AZ_STORAGE_ACCOUNT
 
-require-env DUCKDB_AZ_DATA_DIR
+require-env AZ_DATA_DIR
+
+require-env ABFSS_STORAGE_ACCOUNT
+
+require-env ABFSS_DATA_DIR
 
 statement ok
 set allow_persistent_secrets=false
 
 statement error
-SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'az://${AZ_DATA_DIR}/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found!
 
@@ -25,20 +29,32 @@ CREATE SECRET az1 (
     TYPE AZURE,
     PROVIDER ACCESS_TOKEN,
     ACCESS_TOKEN '${AZURE_ACCESS_TOKEN}',
-    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}',
+	SCOPE 'az://'
 )
 
 query I
-SELECT count(*) FROM 'azure://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'az://${AZ_DATA_DIR}/l.parquet';
 ----
 60175
 
 query I
-SELECT count(*) FROM 'abfss://${DUCKDB_AZ_DATA_DIR}/l.parquet';
+FROM glob('az://${AZ_DATA_DIR}/*.parquet');
+----
+az://${AZ_DATA_DIR}/l.parquet
+
+
+statement ok
+CREATE SECRET abfss1 (
+    TYPE AZURE,
+    PROVIDER ACCESS_TOKEN,
+    ACCESS_TOKEN '${AZURE_ACCESS_TOKEN}',
+    ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}',
+	SCOPE 'abfss://'
+)
+
+query I
+SELECT count(*) FROM 'abfss://${ABFSS_DATA_DIR}/l.parquet';
 ----
 60175
 
-query I
-FROM glob('az://${DUCKDB_AZ_DATA_DIR}/*.parquet');
-----
-az://${DUCKDB_AZ_DATA_DIR}/l.parquet

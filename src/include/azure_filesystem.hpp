@@ -3,12 +3,13 @@
 #include "azure_parsed_url.hpp"
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/file_opener.hpp"
-#include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/main/client_context_state.hpp"
+
 #include <azure/core/datetime.hpp>
-#include <ctime>
 #include <cstdint>
+#include <ctime>
 
 namespace duckdb {
 
@@ -52,6 +53,10 @@ public:
 	void Close() override {
 	}
 
+	bool IsRemoteLoaded() {
+		return is_remote_loaded;
+	}
+
 protected:
 	AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
 	                const AzureReadOptions &read_options);
@@ -60,6 +65,7 @@ public:
 	FileOpenFlags flags;
 
 	// File info
+	bool is_remote_loaded;
 	idx_t length;
 	timestamp_t last_modified;
 
@@ -96,7 +102,6 @@ public:
 	timestamp_t GetLastModifiedTime(FileHandle &handle) override;
 	void Seek(FileHandle &handle, idx_t location) override;
 	idx_t SeekPosition(FileHandle &handle) override;
-	void FileSync(FileHandle &handle) override;
 
 	bool LoadFileInfo(AzureFileHandle &handle);
 

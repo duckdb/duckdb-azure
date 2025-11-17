@@ -1,24 +1,21 @@
 #include "azure_blob_filesystem.hpp"
 
 #include "azure_storage_account_client.hpp"
-#include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/shared_ptr.hpp"
-#include "azure_http_state.hpp"
-#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/main/secret/secret.hpp"
-#include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/function/scalar/string_common.hpp"
-#include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/main/client_data.hpp"
-#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "include/azure_blob_filesystem.hpp"
+
+#include <azure/core/io/body_stream.hpp>
 #include <azure/storage/blobs.hpp>
-#include <chrono>
+#include <azure/storage/blobs/blob_options.hpp>
 #include <cstdlib>
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -78,10 +75,17 @@ AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSyste
 unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                      optional_ptr<FileOpener> opener) {
 	if (!opener) {
-		throw InternalException("Cannot do Azure storage CreateHandle without FileOpener");
+		throw InternalException("Unsupported(INTERNAL): cannot create an Azure blob Handle without FileOpener");
 	}
-
-	D_ASSERT(flags.Compression() == FileCompressionType::UNCOMPRESSED);
+	if (flags.Compression() != FileCompressionType::UNCOMPRESSED) {
+		throw InternalException("Unsupported(INTERNAL): cannot open an Azure blob in compressed mode");
+	}
+	if (flags.OpenForReading() && (flags.OpenForWriting() || flags.OpenForAppending())) {
+		throw NotImplementedException("Unsupported: cannot open an Azure blob in read+write mode");
+	}
+	if (flags.OpenForAppending()) {
+		throw NotImplementedException("Unsupported: cannot open an Azure blob in append mode");
+	}
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
@@ -168,14 +172,55 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 	return result;
 }
 
-void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
-	auto &hfh = handle.Cast<AzureBlobStorageFileHandle>();
-
-	if (hfh.length == 0 && hfh.last_modified == timestamp_t(0)) {
-		auto res = hfh.blob_client.GetProperties();
-		hfh.length = res.Value.BlobSize;
-		hfh.last_modified = ToTimestamp(res.Value.LastModified);
+// Caller beware -- this is always recursive, performance may be terrible.
+bool AzureBlobStorageFileSystem::ListFilesExtended(const string &path_in,
+                                                   const std::function<void(OpenFileInfo &info)> &callback,
+                                                   optional_ptr<FileOpener> opener) {
+	if (path_in.find('*') != string::npos) {
+		throw InvalidInputException("ListFiles does not support globs");
 	}
+	// Normalize: to end with '/' so it's a clear dir prefix
+	auto path = (!path_in.empty() && path_in.back() == '/') ? path_in : (path_in + '/');
+	auto parsed_url = ParseUrl(path);
+	auto storage_context = GetOrCreateStorageContext(opener, path, parsed_url);
+	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(parsed_url.container);
+
+	bool rv = false;
+	const Azure::Storage::Blobs::ListBlobsOptions options = {/* .Prefix = */ parsed_url.path};
+	for (auto page = container.ListBlobs(options); page.HasPage(); page.MoveToNextPage()) {
+		for (auto &blob : page.Blobs) {
+			// confirm that blob is direct "child" of path, skip any deeper descendents
+			if (blob.Name.find('/') != string::npos) {
+				continue;
+			}
+			rv = true;
+			OpenFileInfo info(path + blob.Name);
+			info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+			auto &options = info.extended_info->options;
+			options.emplace("file_size", Value::BIGINT(blob.BlobSize));
+			options.emplace("last_modified",
+			                Value::TIMESTAMP(AzureStorageFileSystem::ToTimestamp(blob.Details.LastModified)));
+			// NOTE: there's a LOT of metadata available, and tags, etc. -- see
+			// https://github.com/Azure/azure-sdk-for-cpp/blob/main/sdk/storage/azure-storage-blobs/inc/azure/storage/blobs/rest_client.hpp#L1134
+			// (struct BlobItemDetails) and
+			// https://learn.microsoft.com/en-us/rest/api/storageservices/list-blobs
+			callback(info);
+		}
+	}
+	return rv;
+}
+
+void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
+	auto &afh = handle.Cast<AzureBlobStorageFileHandle>();
+
+	if (afh.IsRemoteLoaded()) {
+		return;
+	}
+	afh.file_offset = 0;
+	auto res = afh.blob_client.GetProperties();
+	afh.length = res.Value.BlobSize;
+	afh.last_modified = ToTimestamp(res.Value.LastModified);
+	afh.is_remote_loaded = true;
 }
 
 bool AzureBlobStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
@@ -216,6 +261,43 @@ shared_ptr<AzureContextState> AzureBlobStorageFileSystem::CreateStorageContext(o
 
 	return make_shared_ptr<AzureBlobContextState>(ConnectToBlobStorageAccount(opener, path, parsed_url),
 	                                              azure_read_options);
+}
+
+int64_t AzureBlobStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes) {
+	auto &afh = handle.Cast<AzureBlobStorageFileHandle>();
+	Write(handle, buffer, nr_bytes, afh.file_offset);
+	return nr_bytes;
+}
+
+void AzureBlobStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) {
+	auto &afh = handle.Cast<AzureBlobStorageFileHandle>();
+
+	if (!(afh.flags.OpenForWriting() || afh.flags.OpenForAppending())) {
+		throw InternalException("Write called on file opened in read mode");
+	}
+
+	if (location != afh.file_offset || location != afh.length) {
+		throw InternalException("Write supported only sequentially or at location=0");
+	}
+
+	DUCKDB_LOG_FILE_SYSTEM_WRITE(handle, nr_bytes, afh.file_offset);
+
+	// NOTE: if changing to BlockBlobClient (probably will do), FileSync below must also become
+	// real. Only with AppendBlobClient is each append committed (sync'd).
+	auto append_client = afh.blob_client.AsAppendBlobClient();
+	if (afh.file_offset == 0) {
+		append_client.Create();
+	}
+	auto body_stream = Azure::Core::IO::MemoryBodyStream(static_cast<uint8_t *>(buffer), nr_bytes);
+	auto res = append_client.AppendBlock(body_stream);
+	afh.last_modified = ToTimestamp(res.Value.LastModified);
+	D_ASSERT(res.Value.AppendOffset == afh.file_offset);
+	afh.file_offset += nr_bytes;
+	afh.length += nr_bytes;
+}
+
+void AzureBlobStorageFileSystem::FileSync(FileHandle &handle) {
+	return;
 }
 
 } // namespace duckdb
