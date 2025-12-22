@@ -5,51 +5,46 @@
 # Require statement will ensure this test is run with this extension loaded
 require azure
 
-require-env AZURE_STORAGE_ACCOUNT
+require-env ABFSS_STORAGE_ACCOUNT
 
-require-env AZ_DATA_DIR
+require-env AZ_STORAGE_ACCOUNT
 
 require-env AZURE_AUTH_ENV 1
 
-
-# This test only confirms that FileExists gets called (not whether it's correct),
-# in response to Issue#68 -- Since Azurite doesn't support DFS there's no local
-# way to test it.
+statement ok
+CREATE OR REPLACE SECRET abfss_authn (
+	TYPE AZURE,
+	PROVIDER CREDENTIAL_CHAIN,
+	ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}',
+	SCOPE 'abfss://'
+);
 
 statement ok
-CREATE SECRET az1 (
-    TYPE AZURE,
-    PROVIDER CREDENTIAL_CHAIN,
-    ACCOUNT_NAME '${AZURE_STORAGE_ACCOUNT}'
-)
+CREATE OR REPLACE SECRET az_authn (
+	TYPE AZURE,
+	PROVIDER CREDENTIAL_CHAIN,
+	ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}',
+	SCOPE 'az://'
+);
 
-# NOTE: previous output, only on DFS since the container check comes from within FileExists calls:
-# D INSTALL 'abfss://foo/bar/go.duckdb_extension';
-# Not implemented Error:
-# AzureDfsStorageFileSystem: FileExists is not implemented!
-#
-# Getting output that container doesn't exist/invalid storage account confirms entry into FileExists call.
+foreach proto abfss az
 
+# This test only confirms that FileExists gets called (not whether it's correct), and it's brittle at that.
 statement error
-INSTALL 'az://invalid-container/dir/ext.duckdb_extension';
+INSTALL '${proto}://invalid-container/dir/ext.duckdb_extension';
 ----
 container does not exist
 
-
+# confirm file not exist
 statement error
-INSTALL 'abfss://invalid-container/dir/ext.duckdb_extension';
+INSTALL '${proto}://duckdblabs-data/common/azure_data/non-existent.duckdb_extension';
 ----
-container does not exist
+<REGEX>:.*(blob|file) does not exist.*
 
-
-# NOTE: now test actual existance in az:// only -- abfss:// can only be a cloud test
+# and confirm file exists (doesn't load, but unnecessary to the test)
 statement error
-INSTALL 'az://testing-public/non-existent.duckdb_extension';
-----
-blob does not exist
-
-statement error
-INSTALL 'az://${AZ_DATA_DIR}/l.csv';
+INSTALL '${proto}://duckdblabs-data/common/azure_data/l.csv';
 ----
 file is not a DuckDB extension
 
+endloop

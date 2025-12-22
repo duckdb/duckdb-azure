@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+##
+# NOTE: usage -- run_azure [--az|--abfss] prog [args ...]
+# `prog` will receive all the environment vars necessary to authenticate and configure with
+# azure. Often run with either --az or --abfss, which sets additional envvars to execute
+# tests, e.g.
+#
+#   run_azure --az build/debug/test/unittest 'test/sql/cloud/write/*'
+#
+# When credentials are not already set, they will be fetched via op injection.
+#
+# File can also be sourced to set env in current bash/zsh-like shell.
+#
+
+# if secret unset, fetch from 1Password
+[[ -z "$AZURE_CLIENT_SECRET" || -z "$AZURE_CLIENT_ID" || -z "$AZURE_TENANT_ID" ]] && {
+	echo "Azure AuthN missing from env; fetching Azure secrets from 1password."
+	exports=$(op read op://testing-rw/azure/_env | op inject)
+	# be slightly paranoid - no ` or $ in the env
+	echo -n "$export" | grep -e '`' -e '$' && {
+		echo 'Found unexpected ` or $ in azure secret exports from 1Password, aborting.' >&2
+		exit 1
+	}
+	eval "$exports"
+} || {
+	echo "Azure AuthN info found in env."
+}
+
+# unittest doesn't (yet) handle test dir root/suffix/etc., take the simple path to
+# avoiding collision with a date/time + small rand here
+# TODO: (maybe) move this into unittest, plus add cleanup that works w/ e.g. azure
+rand=$(python3 -c 'import uuid; print(str(uuid.uuid4())[10:17])')
+temp_dir_suffix="$USER/$(TZ=Z date +'%Y%m%dT%H%M%SZ')--$rand"
+
+export ABFSS_STORAGE_ACCOUNT=duckdblabstestdata
+export ABFSS_DATA_DIR=duckdblabs-data/common/azure_data
+export ABFSS_TEMP_DIR="duckdblabs-write-testing/extension/azure/$temp_dir_suffix"
+
+export AZ_STORAGE_ACCOUNT=duckdblabstestdatablob
+export AZ_DATA_DIR=duckdblabs-data/common/azure_data
+export AZ_TEMP_DIR="duckdblabs-write-testing/extension/azure/$temp_dir_suffix"
+
+export AZURE_AUTH_ENV=1
+export AZURE_PROVIDER=cloud
+
+[[ -n "$1" && "$1" = "--abfss" ]] && {
+	export AZURE_PROTOCOL=abfss
+	export AZURE_STORAGE_ACCOUNT="$ABFSS_STORAGE_ACCOUNT"
+	export DATA_DIR="$ABFSS_DATADIR"
+	export TEMP_DIR="$ABFSS_TEMPDIR"
+	shift
+}
+
+[[ -n "$1" && "$1" = "--az" ]] && {
+	export AZURE_PROTOCOL=az
+	export AZURE_STORAGE_ACCOUNT="$AZ_STORAGE_ACCOUNT"
+	export DATA_DIR="$AZ_DATADIR"
+	export TEMP_DIR="$AZ_TEMPDIR"
+	shift
+}
+
+exec "$@"

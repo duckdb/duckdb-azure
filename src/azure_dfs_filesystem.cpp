@@ -12,6 +12,7 @@
 #include "duckdb/logging/file_system_logger.hpp"
 
 #include <algorithm>
+#include <azure/storage/blobs/blob_options.hpp>
 #include <azure/storage/common/storage_exception.hpp>
 #include <azure/storage/files/datalake.hpp>
 #include <azure/storage/files/datalake/datalake_directory_client.hpp>
@@ -104,6 +105,12 @@ AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &
     : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options), file_client(std::move(client)) {
 }
 
+void AzureDfsStorageFileHandle::Close() {
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		file_client.Flush(file_offset);
+	}
+}
+
 //////// AzureDfsStorageFileSystem ////////
 unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
@@ -112,9 +119,6 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 	}
 	if (flags.Compression() != FileCompressionType::UNCOMPRESSED) {
 		throw InternalException("Unsupported(INTERNAL): cannot open an Azure file in compressed mode");
-	}
-	if (flags.OpenForWriting()) {
-		throw NotImplementedException("Unsupported: cannot open an Azure file in write mode");
 	}
 	if (flags.OpenForAppending()) {
 		throw NotImplementedException("Unsupported: cannot open an Azure file in append mode");
@@ -144,13 +148,40 @@ bool AzureDfsStorageFileSystem::DirectoryExists(const string &dirname, optional_
 	return handle && handle->Cast<AzureDfsStorageFileHandle>().GetType() == FileType::FILE_TYPE_DIR;
 }
 
-void AzureDfsStorageFileSystem::CreateDirectory(const string &directory, optional_ptr<FileOpener> opener) {
-	throw NotImplementedException("Unsupported in Azure ADLSv2: CreateDirectory");
+void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_ptr<FileOpener> opener) {
+	if (!opener) {
+		throw InternalException("Unsupported(INTERNAL): cannot create an Azure directory without FileOpener");
+	}
+	auto dir_url = ParseUrl(dirname);
+	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
+	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(dir_url.container);
+	file_system_client.GetDirectoryClient(dir_url.path).Create();
 }
 
 bool AzureDfsStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
 	auto handle = OpenFile(filename, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
 	return handle && handle->Cast<AzureDfsStorageFileHandle>().GetType() == FileType::FILE_TYPE_REGULAR;
+}
+
+void AzureDfsStorageFileSystem::RemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
+	auto url = ParseUrl(filename);
+	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
+	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
+	auto file_client = file_system_client.GetFileClient(url.path);
+	try {
+		file_client.Delete();
+	} catch (Azure::Storage::StorageException &e) {
+		throw IOException("AzureDfsStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
+		                  e.ErrorCode, e.ReasonPhrase);
+	}
+}
+
+bool AzureDfsStorageFileSystem::TryRemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
+	auto url = ParseUrl(filename);
+	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
+	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
+	auto file_client = file_system_client.GetFileClient(url.path);
+	return file_client.DeleteIfExists().Value.Deleted;
 }
 
 vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpener *opener) {
@@ -245,13 +276,45 @@ void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 		return;
 	}
 
-	auto res_props = afh.file_client.GetProperties();
-	auto is_dir = res_props.Value.IsDirectory;
-	afh.is_remote_loaded = true; // always set loaded
-	afh.file_type = is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR;
-	afh.length = is_dir ? 0 : res_props.Value.FileSize;
-	afh.last_modified = ToTimestamp(res_props.Value.LastModified);
-	afh.file_offset = 0; // always reset offset state
+	// handling a couple situations here:
+	// - does exist, but want exclusive create
+	// - does exist, just get the data
+	// - does exist, truncate (same API as create)
+	// - doesn't exist, must be created (file; dir create doesn't happen here)
+	// - doesn't exist, don't create
+
+	auto set_props = [&](bool is_dir, idx_t length, timestamp_t last_mod) {
+		afh.is_remote_loaded = true; // always set loaded
+		afh.file_type = is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR;
+		afh.length = is_dir ? 0 : length;
+		afh.last_modified = last_mod;
+		afh.file_offset = 0; // always reset offset state
+	};
+
+	auto create_file = [&]() {
+		auto res_create = afh.file_client.Create();
+		set_props(false, 0, ToTimestamp(res_create.Value.LastModified));
+	};
+	auto truncate_file = create_file;
+
+	try {
+		auto res_props = afh.file_client.GetProperties();
+		if (afh.flags.ExclusiveCreate()) {
+			throw IOException("AzureDfsStorageFileSystem will not open file: '%s', ExclusiveCreate specified "
+			                  "while file already exists.");
+		} else if (afh.flags.OpenForWriting() && afh.flags.OverwriteExistingFile()) {
+			return truncate_file();
+		}
+		// NOTE: honor convention for S3/Azure "foo/" empty file -> "foo" dir marker
+		auto is_dir = StringUtil::EndsWith(afh.GetPath(), "/") || res_props.Value.IsDirectory;
+		return set_props(is_dir, res_props.Value.FileSize, ToTimestamp(res_props.Value.LastModified));
+	} catch (const Azure::Storage::StorageException &e) {
+		if (int(e.StatusCode) == 404 && afh.flags.OpenForWriting() &&
+		    (afh.flags.OverwriteExistingFile() || afh.flags.CreateFileIfNotExists())) {
+			return create_file();
+		}
+		throw;
+	}
 }
 
 void AzureDfsStorageFileSystem::ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out,
@@ -282,6 +345,48 @@ shared_ptr<AzureContextState> AzureDfsStorageFileSystem::CreateStorageContext(op
 
 	return make_shared_ptr<AzureDfsContextState>(ConnectToDfsStorageAccount(opener, path, parsed_url),
 	                                             azure_read_options);
+}
+
+int64_t AzureDfsStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes) {
+	auto &afh = handle.Cast<AzureDfsStorageFileHandle>();
+	Write(handle, buffer, nr_bytes, afh.file_offset);
+	return nr_bytes;
+}
+
+void AzureDfsStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) {
+	D_ASSERT(nr_bytes >= 0);
+	auto &afh = handle.Cast<AzureDfsStorageFileHandle>();
+	D_ASSERT(afh.file_offset + nr_bytes > afh.file_offset); // no overflow
+
+	if (!(afh.flags.OpenForWriting() || afh.flags.OpenForAppending())) {
+		throw InternalException("Write called on file opened in read mode");
+	}
+
+	if (location != afh.file_offset || location != afh.length) {
+		throw InternalException("Write supported only sequentially or at location=0");
+	}
+
+	DUCKDB_LOG_FILE_SYSTEM_WRITE(handle, nr_bytes, afh.file_offset - nr_bytes);
+
+	auto body_stream = Azure::Core::IO::MemoryBodyStream(static_cast<uint8_t *>(buffer), nr_bytes);
+	if (location == 0) {
+	}
+	Azure::Storage::Files::DataLake::AppendFileOptions append_opts;
+	append_opts.Flush = true;
+	auto append_res = afh.file_client.Append(body_stream, afh.file_offset);
+	// auto flush_res = afh.file_client.Flush(afh.file_offset + nr_bytes);
+	// afh.last_modified = ToTimestamp(flush_res.Value.LastModified);
+	// D_ASSERT(idx_t(flush_res.Value.FileSize) == afh.file_offset + nr_bytes);
+	afh.file_offset += nr_bytes;
+	afh.length += nr_bytes;
+}
+
+void AzureDfsStorageFileSystem::FileSync(FileHandle &handle) {
+	// TODO: (@benfleis): uncomment these, and remove from Write to make it async
+	// auto flush_res = afh.file_client.Flush(afh.file_offset);
+	// afh.last_modified = ToTimestamp(flush_res.Value.LastModified);
+	// D_ASSERT(flush_res.Value.FileSize == afh.file_offset);
+	return;
 }
 
 } // namespace duckdb

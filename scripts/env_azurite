@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# straight from azurite docs
+export AZURE_STORAGE_ACCOUNT=devstoreaccount1
+export AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+
+# unittest doesn't (yet) handle test dir root/suffix/etc., take the simple path to
+# avoiding collision with a date/time + small rand here
+# TODO: (maybe) move this into unittest, plus add cleanup that works w/ e.g. azure
+rand=$(python3 -c 'import uuid; print(str(uuid.uuid4())[10:17])')
+temp_dir_suffix="$USER/$(TZ=Z date +'%Y%m%dT%H%M%SZ')--$rand"
+
+unset ABFSS_STORAGE_ACCOUNT
+unset ABFSS_DATA_DIR
+unset ABFSS_TEMP_DIR
+export AZ_DATA_DIR="testing-private"
+export AZ_TEMP_DIR="writes/$temp_dir_suffix"
+export AZ_STORAGE_ACCOUNT="$AZURE_STORAGE_ACCOUNT"
+
+export AZURE_PROTOCOL=az
+export AZURE_PROVIDER=local
+export DATA_DIR="$AZ_DATADIR"
+export TEMP_DIR="$AZ_TEMPDIR"
+
+# for compatibility, accept --az arg, and fail on --abfss
+[[ -n "$1" && "$1" = "--abfss" ]] && {
+	echo "run_azurite can only operate in --az mode, aborting." >&2
+	exit
+}
+[[ -n "$1" && "$1" = "--az" ]] && {
+	# NOOP
+	shift
+}
+
+exec "$@"

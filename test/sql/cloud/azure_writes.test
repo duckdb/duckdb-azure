@@ -6,6 +6,10 @@ require azure
 
 require parquet
 
+require-env ABFSS_TEMP_DIR
+
+require-env ABFSS_STORAGE_ACCOUNT
+
 require-env AZ_TEMP_DIR
 
 require-env AZ_STORAGE_ACCOUNT
@@ -13,26 +17,37 @@ require-env AZ_STORAGE_ACCOUNT
 require-env AZURE_AUTH_ENV 1
 
 statement ok
-CREATE SECRET az1 (
-    TYPE AZURE,
-    PROVIDER CREDENTIAL_CHAIN,
-    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
-)
+CREATE OR REPLACE SECRET abfss_authn (
+	TYPE AZURE,
+	PROVIDER CREDENTIAL_CHAIN,
+	ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}',
+	SCOPE 'abfss://'
+);
+
+statement ok
+CREATE OR REPLACE SECRET az_authn (
+	TYPE AZURE,
+	PROVIDER CREDENTIAL_CHAIN,
+	ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}',
+	SCOPE 'az://'
+);
+
+foreach proto abfss az
 
 ## Basic write & read
 query I
-COPY (SELECT id: 42) TO 'az://${AZ_TEMP_DIR}/write-id-42.csv';
+COPY (SELECT id: 42) TO '${proto}://duckdblabs-write-testing/extension/azure/write-id-42.csv';
 ----
 1
 
 query I
-SELECT id FROM 'az://${AZ_TEMP_DIR}/write-id-42.csv';
+SELECT id FROM '${proto}://duckdblabs-write-testing/extension/azure/write-id-42.csv';
 ----
 42
 
 # load lineitem in memory for some copies
 statement ok
-CREATE TABLE lineitem AS FROM './data/l.parquet';
+CREATE TABLE IF NOT EXISTS lineitem AS FROM './data/l.parquet';
 
 # check source query
 query I
@@ -43,18 +58,18 @@ SELECT sum(l_orderkey) FROM lineitem;
 # Copy to CSV
 statement ok
 COPY lineitem
-TO 'az://${AZ_TEMP_DIR}/lineitem-copied.csv';
+TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-copied.csv';
 
 # ... and confirm result from copy
 query I
-SELECT sum(l_orderkey) FROM 'az://${AZ_TEMP_DIR}/lineitem-copied.csv';
+SELECT sum(l_orderkey) FROM '${proto}://duckdblabs-write-testing/extension/azure/lineitem-copied.csv';
 ----
 1802759573
 
 # Copy to parquet with a couple partitions
 statement ok
 COPY lineitem
-TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
+TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_linestatus),
 	OVERWRITE_OR_IGNORE true
@@ -64,7 +79,7 @@ TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
 query II
 SELECT sum(l_orderkey), count(DISTINCT l_linestatus)
 FROM read_parquet(
-	'az://${AZ_TEMP_DIR}/lineitem-partitioned/*/*.parquet', 
+	'${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned/*/*.parquet', 
 	HIVE_PARTITIONING = true
 )
 ----
@@ -73,10 +88,12 @@ FROM read_parquet(
 # Confirm failure to overwrite when disabled
 statement error
 COPY lineitem
-TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
+TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_linestatus),
 	OVERWRITE false
 );
 ----
 is not empty
+
+endloop
