@@ -199,7 +199,12 @@ shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(
 
 	shared_ptr<AzureContextState> result;
 	if (azure_context_caching && client_context) {
-		auto context_key = GetContextPrefix() + parsed_url.storage_account_name;
+		// Cache context key is semantically based on storage_account; if that's unavailable it means we're using
+		// secret manager to deref container -> storage account, which further implies that protocol + container scopes
+		// must uniquely map to a storage account (e.g. az://container1/)
+		auto second =
+		    (parsed_url.storage_account_name.size() > 0 ? parsed_url.storage_account_name : parsed_url.container) + "/";
+		auto context_key = GetContextPrefix() + second;
 
 		auto &registered_state = client_context->registered_state;
 
