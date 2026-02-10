@@ -5,9 +5,10 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "include/azure_filesystem.hpp"
 
 #include <azure/storage/common/storage_exception.hpp>
+
+#include "azure_storage_account_client.hpp"
 
 namespace duckdb {
 
@@ -187,6 +188,44 @@ int64_t AzureStorageFileSystem::Read(FileHandle &handle, void *buffer, int64_t n
 	return nr_bytes;
 }
 
+static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed) {
+	// context key == proto://{storage_account}{.}{endpoint}
+	// when storage account / endpoint unavailable, try to fetch via secret manager
+	string account;
+	string endpoint;
+
+	if (parsed.is_fully_qualified) {
+		account = parsed.storage_account_name;
+		endpoint = parsed.endpoint;
+	} else {
+		// no storage account? map it from the secret if possible
+		auto secret_match = LookupSecret(opener, path);
+		if (secret_match.HasMatch()) {
+			const auto &secret = dynamic_cast<const KeyValueSecret &>(secret_match.GetSecret());
+
+			const auto account_from_secret = secret.TryGetValue("account_name", false);
+			if (!account_from_secret.IsNull()) {
+				account = account_from_secret.ToString();
+			}
+			const auto endpoint_from_secret = secret.TryGetValue("endpoint", false);
+			if (!endpoint_from_secret.IsNull()) {
+				endpoint = endpoint_from_secret.ToString();
+			}
+		}
+	}
+
+	// build key from account and/or endpoint, ow return ""
+	const auto has_account = !account.empty();
+	const auto has_endpoint = !endpoint.empty();
+	if (!has_account && !has_endpoint) {
+		return "";
+	}
+	if (has_account && has_endpoint) {
+		return account + "." + endpoint;
+	}
+	return has_account ? account : endpoint;
+}
+
 shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(optional_ptr<FileOpener> opener,
                                                                                 const string &path,
                                                                                 const AzureParsedUrl &parsed_url) {
@@ -199,20 +238,22 @@ shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(
 
 	shared_ptr<AzureContextState> result;
 	if (azure_context_caching && client_context) {
-		auto context_key = GetContextPrefix() + parsed_url.storage_account_name;
-
+		string key_path = GetContextKeyPath(opener, path, parsed_url);
 		auto &registered_state = client_context->registered_state;
 
-		result = registered_state->Get<AzureContextState>(context_key);
-		if (!result || !result->IsValid()) {
-			result = CreateStorageContext(opener, path, parsed_url);
-			registered_state->Insert(context_key, result);
+		// Ok, now use account in key, or otherwise skip the cache
+		if (!key_path.empty()) {
+			auto context_key = GetContextPrefix() + key_path;
+			result = registered_state->Get<AzureContextState>(context_key);
+			if (!result || !result->IsValid()) {
+				result = CreateStorageContext(opener, path, parsed_url);
+				registered_state->Insert(context_key, result);
+				return result;
+			}
 		}
-	} else {
-		result = CreateStorageContext(opener, path, parsed_url);
 	}
 
-	return result;
+	return CreateStorageContext(opener, path, parsed_url);
 }
 
 AzureReadOptions AzureStorageFileSystem::ParseAzureReadOptions(optional_ptr<FileOpener> opener) {

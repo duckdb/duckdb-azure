@@ -87,10 +87,10 @@ jobs:
           export AZURE_ACCESS_TOKEN=`az account get-access-token --resource https://storage.azure.com --query accessToken --output tsv`
           scripts/env_azure env -u AZURE_CLIENT_SECRET ./build/release/test/unittest "test/sql/cloud/access_token_auth.test"
 
-      - name: Clean credentials
+      - name: Clear all az credentials from disk
         if: always()
         run: |
-          az logout || true # don't fail cuz of this
+          az account clear || true # don't fail cuz of this
 
       - name: Tests that focus on public non-authenticated requests
         env:
