@@ -31,7 +31,7 @@ jobs:
       duckdb_version: v1.4.4
       ci_tools_version: v1.4.4
       exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_rtools;windows_amd64_mingw'
-      deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
+      deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/v1.4-andium' }}
 
   code-quality-check:
     name: Code Quality Check
