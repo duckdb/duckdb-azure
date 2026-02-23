@@ -437,7 +437,7 @@ void AzureBlobStorageFileHandle::Close() {
 	if (flags.OpenForWriting() && !pending_block_ids.empty()) {
 		Sync();
 	}
-	// DUCKDB_LOG_FILE_SYSTEM_CLOSE(*this);
+	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 void AzureBlobStorageFileSystem::FileSync(FileHandle &handle) {

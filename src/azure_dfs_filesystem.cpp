@@ -118,6 +118,7 @@ void AzureDfsStorageFileHandle::Close() {
 		flush_opts.Close = true;
 		file_client.Flush(file_offset, flush_opts);
 	}
+	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureDfsStorageFileSystem ////////
