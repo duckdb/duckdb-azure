@@ -33,6 +33,7 @@ public:
 	                          Azure::Storage::Files::DataLake::DataLakeFileClient client);
 	~AzureDfsStorageFileHandle() override = default;
 
+	void Sync();
 	void Close() override;
 
 public:
