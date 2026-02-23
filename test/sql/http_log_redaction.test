@@ -1,0 +1,122 @@
+# name: test/sql/http_log_redaction.test
+# description: Test that sensitive query parameters and headers are redacted in HTTP logs by default
+# group: [sql]
+
+require azure
+
+require-env AZURE_STORAGE_CONNECTION_STRING
+
+statement ok
+SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+SET azure_http_logging = true;
+
+statement ok
+SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
+
+# Verify that at least one HTTP log entry was recorded
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP');
+----
+true
+
+# Verify that 'sig' query parameter is redacted by default:
+# If 'sig' appears in the URL it must be redacted; some auth types don't use 'sig' at all, which is also fine.
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE contains(request.url, 'sig=') AND NOT contains(request.url, 'sig=REDACTED');
+----
+true
+
+# Verify that 'Authorization' header is redacted by default:
+# If present in logs, its value must be REDACTED; some auth types don't send this header at all.
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.headers['authorization'] IS NOT NULL
+  AND request.headers['authorization'] != 'REDACTED';
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Test custom redaction: redact 'x-ms-date' header
+statement ok
+SET azure_http_logging_redact_headers = 'x-ms-date';
+
+statement ok
+SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
+
+# x-ms-date header should be redacted
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.headers['x-ms-date'] IS NOT NULL
+  AND request.headers['x-ms-date'] != 'REDACTED';
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Test multiple headers in config (semicolon-separated): redact both 'x-ms-date' and 'x-ms-version'
+statement ok
+SET azure_http_logging_redact_headers = 'x-ms-date;x-ms-version';
+
+statement ok
+SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
+
+# x-ms-date must be redacted if present
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.headers['x-ms-date'] IS NOT NULL
+  AND request.headers['x-ms-date'] != 'REDACTED';
+----
+true
+
+# x-ms-version must be redacted if present
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.headers['x-ms-version'] IS NOT NULL
+  AND request.headers['x-ms-version'] != 'REDACTED';
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Test that redaction can be disabled by setting empty list
+statement ok
+SET azure_http_logging_redact_query_params = '';
+
+statement ok
+SET azure_http_logging_redact_headers = '';
+
+statement ok
+SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
+
+# With no redaction, logs should still contain entries
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP');
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Reset to defaults
+statement ok
+SET azure_http_logging_redact_query_params = 'sig';
+
+statement ok
+SET azure_http_logging_redact_headers = 'Authorization';

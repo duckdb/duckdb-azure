@@ -1,0 +1,40 @@
+# name: test/sql/user_agent.test
+# description: Confirm that the User-Agent header is set with the standard duckdb prefix
+# group: [sql]
+
+require azure
+
+require-env AZURE_STORAGE_CONNECTION_STRING
+
+statement ok
+SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+SET azure_http_logging = true;
+
+statement ok
+SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
+
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE starts_with(request.headers['user-agent'], 'duckdb');
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+SET azure_http_logging = false;
+
+statement ok
+SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP');
+----
+0
