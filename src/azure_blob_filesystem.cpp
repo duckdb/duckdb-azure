@@ -79,6 +79,33 @@ AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSyste
     : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options), blob_client(std::move(blob_client)) {
 }
 
+void AzureBlobStorageFileHandle::Sync() {
+	D_ASSERT((flags.OpenForWriting() || flags.OpenForAppending()) || pending_block_ids.empty());
+	if (pending_block_ids.empty()) {
+		return;
+	}
+	try {
+		std::vector<std::string> all_ids;
+		all_ids.reserve(committed_block_count + pending_block_ids.size());
+		for (uint32_t i = 0; i < committed_block_count; i++) {
+			all_ids.push_back(MakeBlockId(i));
+		}
+		all_ids.insert(all_ids.end(), pending_block_ids.begin(), pending_block_ids.end());
+		auto res = blob_client.CommitBlockList(all_ids);
+		last_modified = AzureBlobStorageFileSystem::ToTimestamp(res.Value.LastModified);
+		committed_block_count += pending_block_ids.size();
+		pending_block_ids.clear();
+	} catch (const Azure::Storage::StorageException &e) {
+		throw IOException("AzureBlobStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
+		                  e.ErrorCode, e.ReasonPhrase);
+	}
+}
+
+void AzureBlobStorageFileHandle::Close() {
+	Sync();
+	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
+}
+
 //////// AzureBlobStorageFileSystem ////////
 unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                      optional_ptr<FileOpener> opener) {
@@ -412,40 +439,8 @@ void AzureBlobStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t
 	DUCKDB_LOG_FILE_SYSTEM_WRITE(handle, nr_bytes, afh.file_offset);
 }
 
-void AzureBlobStorageFileHandle::Sync() {
-	if (pending_block_ids.empty()) {
-		return;
-	}
-	try {
-		std::vector<std::string> all_ids;
-		all_ids.reserve(committed_block_count + pending_block_ids.size());
-		for (uint32_t i = 0; i < committed_block_count; i++) {
-			all_ids.push_back(MakeBlockId(i));
-		}
-		all_ids.insert(all_ids.end(), pending_block_ids.begin(), pending_block_ids.end());
-		auto res = blob_client.CommitBlockList(all_ids);
-		last_modified = AzureBlobStorageFileSystem::ToTimestamp(res.Value.LastModified);
-		committed_block_count += pending_block_ids.size();
-		pending_block_ids.clear();
-	} catch (const Azure::Storage::StorageException &e) {
-		throw IOException("AzureBlobStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
-		                  e.ErrorCode, e.ReasonPhrase);
-	}
-}
-
-void AzureBlobStorageFileHandle::Close() {
-	if (flags.OpenForWriting() && !pending_block_ids.empty()) {
-		Sync();
-	}
-	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
-}
-
 void AzureBlobStorageFileSystem::FileSync(FileHandle &handle) {
-	auto &afh = handle.Cast<AzureBlobStorageFileHandle>();
-	if (!(afh.flags.OpenForWriting() || afh.flags.OpenForAppending())) {
-		return;
-	}
-	afh.Sync();
+	Cast<AzureBlobStorageFileHandle>().Sync();
 }
 
 } // namespace duckdb

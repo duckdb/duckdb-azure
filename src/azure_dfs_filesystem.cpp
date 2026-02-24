@@ -106,18 +106,16 @@ AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &
     : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options), file_client(std::move(client)) {
 }
 
-void AzureDfsStorageFileHandle::Sync() {
+void AzureDfsStorageFileHandle::Sync(bool close) {
 	if (flags.OpenForWriting() || flags.OpenForAppending()) {
-		file_client.Flush(file_offset);
+		Azure::Storage::Files::DataLake::FlushFileOptions flush_opts;
+		flush_opts.Close = close;
+		file_client.Flush(file_offset, flush_opts);
 	}
 }
 
 void AzureDfsStorageFileHandle::Close() {
-	if (flags.OpenForWriting() || flags.OpenForAppending()) {
-		Azure::Storage::Files::DataLake::FlushFileOptions flush_opts;
-		flush_opts.Close = true;
-		file_client.Flush(file_offset, flush_opts);
-	}
+	Sync(true);
 	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
