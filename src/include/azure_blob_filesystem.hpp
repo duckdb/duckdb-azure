@@ -8,6 +8,7 @@
 
 #include <azure/storage/blobs/blob_client.hpp>
 #include <azure/storage/blobs/blob_service_client.hpp>
+#include <azure/storage/blobs/block_blob_client.hpp>
 #include <string>
 
 namespace duckdb {
@@ -27,14 +28,17 @@ class AzureBlobStorageFileSystem;
 class AzureBlobStorageFileHandle : public AzureFileHandle {
 public:
 	AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-	                           const AzureReadOptions &read_options, Azure::Storage::Blobs::BlobClient blob_client);
+	                           const AzureReadOptions &read_options,
+	                           Azure::Storage::Blobs::BlockBlobClient blob_client);
 	~AzureBlobStorageFileHandle() override = default;
 
-	void Close() override {
-	}
+	void Sync();
+	void Close() override;
 
 public:
-	Azure::Storage::Blobs::BlobClient blob_client;
+	Azure::Storage::Blobs::BlockBlobClient blob_client;
+	size_t committed_block_count = 0; // maintain position while open; only used if Sync() called before Close()
+	std::vector<std::string> pending_block_ids;
 };
 
 class AzureBlobStorageFileSystem : public AzureStorageFileSystem {

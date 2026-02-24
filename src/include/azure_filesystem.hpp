@@ -51,9 +51,6 @@ class AzureStorageFileSystem;
 class AzureFileHandle : public FileHandle {
 public:
 	virtual bool PostConstruct();
-	void Close() override {
-		DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
-	}
 
 	bool IsRemoteLoaded() {
 		return is_remote_loaded;

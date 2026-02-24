@@ -14,6 +14,7 @@
 #include "duckdb/main/client_data.hpp"
 #include "include/azure_blob_filesystem.hpp"
 
+#include <azure/core/base64.hpp>
 #include <azure/core/io/body_stream.hpp>
 #include <azure/storage/blobs.hpp>
 #include <azure/storage/blobs/blob_options.hpp>
@@ -21,6 +22,12 @@
 #include <cstdlib>
 
 namespace duckdb {
+
+// Encode uint32 as big-endian 4 bytes → base64 (always 8 chars, same length for all IDs)
+static std::string MakeBlockId(uint32_t i) {
+	uint8_t bytes[4] = {uint8_t(i >> 24), uint8_t(i >> 16), uint8_t(i >> 8), uint8_t(i)};
+	return Azure::Core::Convert::Base64Encode({bytes, bytes + 4});
+}
 
 const string AzureBlobStorageFileSystem::SCHEME = "azure";
 const string AzureBlobStorageFileSystem::SHORT_SCHEME = "az";
@@ -68,8 +75,35 @@ AzureBlobContextState::GetBlobContainerClient(const std::string &blobContainerNa
 //////// AzureBlobStorageFileHandle ////////
 AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info,
                                                        FileOpenFlags flags, const AzureReadOptions &read_options,
-                                                       Azure::Storage::Blobs::BlobClient blob_client)
+                                                       Azure::Storage::Blobs::BlockBlobClient blob_client)
     : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options), blob_client(std::move(blob_client)) {
+}
+
+void AzureBlobStorageFileHandle::Sync() {
+	D_ASSERT((flags.OpenForWriting() || flags.OpenForAppending()) || pending_block_ids.empty());
+	if (pending_block_ids.empty()) {
+		return;
+	}
+	try {
+		std::vector<std::string> all_ids;
+		all_ids.reserve(committed_block_count + pending_block_ids.size());
+		for (uint32_t i = 0; i < committed_block_count; i++) {
+			all_ids.push_back(MakeBlockId(i));
+		}
+		all_ids.insert(all_ids.end(), pending_block_ids.begin(), pending_block_ids.end());
+		auto res = blob_client.CommitBlockList(all_ids);
+		last_modified = AzureBlobStorageFileSystem::ToTimestamp(res.Value.LastModified);
+		committed_block_count += pending_block_ids.size();
+		pending_block_ids.clear();
+	} catch (const Azure::Storage::StorageException &e) {
+		throw IOException("AzureBlobStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
+		                  e.ErrorCode, e.ReasonPhrase);
+	}
+}
+
+void AzureBlobStorageFileHandle::Close() {
+	Sync();
+	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureBlobStorageFileSystem ////////
@@ -257,7 +291,7 @@ void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	};
 
 	auto create_file = [&]() {
-		auto res_create = afh.blob_client.AsAppendBlobClient().Create();
+		auto res_create = afh.blob_client.CommitBlockList({});
 		set_props(false, 0, ToTimestamp(res_create.Value.LastModified));
 	};
 	auto truncate_file = create_file;
@@ -394,25 +428,19 @@ void AzureBlobStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t
 		throw InternalException("Write called on file opened in read mode");
 	}
 
-	if (location != 0 && location != afh.file_offset) {
-		throw InternalException("Write supported only sequentially or at location=0");
-	}
+	D_ASSERT(location == afh.file_offset || location == 0);
 
-	// NOTE: if changing to BlockBlobClient (probably will do), FileSync below must also become
-	// real. Only with AppendBlobClient is each append committed (sync'd).
-	auto append_client = afh.blob_client.AsAppendBlobClient();
+	auto block_id = MakeBlockId(afh.committed_block_count + static_cast<uint32_t>(afh.pending_block_ids.size()));
 	auto body_stream = Azure::Core::IO::MemoryBodyStream(static_cast<uint8_t *>(buffer), nr_bytes);
-	auto res = append_client.AppendBlock(body_stream);
-	afh.last_modified = ToTimestamp(res.Value.LastModified);
-	D_ASSERT(idx_t(res.Value.AppendOffset) == afh.file_offset);
+	afh.blob_client.StageBlock(block_id, body_stream); // throws on error
+	afh.pending_block_ids.push_back(block_id);
 	afh.file_offset += nr_bytes;
 	afh.length += nr_bytes;
 	DUCKDB_LOG_FILE_SYSTEM_WRITE(handle, nr_bytes, afh.file_offset);
 }
 
 void AzureBlobStorageFileSystem::FileSync(FileHandle &handle) {
-	// NOOP in Blob, appends always sync
-	return;
+	Cast<AzureBlobStorageFileHandle>().Sync();
 }
 
 } // namespace duckdb

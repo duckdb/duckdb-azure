@@ -106,8 +106,17 @@ AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &
     : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options), file_client(std::move(client)) {
 }
 
+void AzureDfsStorageFileHandle::Sync(bool close) {
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		Azure::Storage::Files::DataLake::FlushFileOptions flush_opts;
+		flush_opts.Close = close;
+		file_client.Flush(file_offset, flush_opts);
+	}
+}
+
 void AzureDfsStorageFileHandle::Close() {
-	file_system.FileSync(*this);
+	Sync(true);
+	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureDfsStorageFileSystem ////////
@@ -366,8 +375,6 @@ void AzureDfsStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t 
 	}
 
 	auto body_stream = Azure::Core::IO::MemoryBodyStream(static_cast<uint8_t *>(buffer), nr_bytes);
-	Azure::Storage::Files::DataLake::AppendFileOptions append_opts;
-	append_opts.Flush = true;
 	auto append_res = afh.file_client.Append(body_stream, afh.file_offset);
 	// NOTE: cannot get TS when using paired append + flush
 	// afh.last_modified = ToTimestamp(append_res.Value.LastModified);
@@ -377,10 +384,7 @@ void AzureDfsStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t 
 }
 
 void AzureDfsStorageFileSystem::FileSync(FileHandle &handle) {
-	auto &afh = handle.Cast<AzureDfsStorageFileHandle>();
-	if (afh.flags.OpenForWriting() || afh.flags.OpenForAppending()) {
-		afh.file_client.Flush(afh.file_offset);
-	}
+	handle.Cast<AzureDfsStorageFileHandle>().Sync();
 }
 
 } // namespace duckdb
