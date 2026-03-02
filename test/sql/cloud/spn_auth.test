@@ -17,6 +17,10 @@ require-env AZ_STORAGE_ACCOUNT
 require-env AZ_DATA_DIR
 
 
+# setup: Validate credential caching in az cli use
+statement ok
+CALL enable_logging('HTTP');
+
 statement error
 SELECT count(*) FROM 'azure://${AZ_DATA_DIR}/l.parquet';
 ----
@@ -41,3 +45,15 @@ query I
 FROM glob('az://${AZ_DATA_DIR}/*.parquet');
 ----
 az://${AZ_DATA_DIR}/l.parquet
+
+# TODO: validate that credential call only occurs 1x
+# - BLOCKED by lack of HTTP headers in Azure - see 
+# - demonstrate credential cache by call/header check for /oauth2/
+# - demonstrate invalidation by REPLACE SECRET, call/header check
+# - duplicate same to SPN auth
+#
+# Manual tests:
+# - full suite of non slow tests goes from 260 -> 26 calls to Azure's /oauth2/
+# - this test alone goes from 3 -> 1 calls
+statement ok
+FROM duckdb_logs_parsed('HTTP');

@@ -24,12 +24,12 @@ export TEMP_DIR="$AZ_TEMPDIR"
 
 # for compatibility, accept --az arg, and fail on --abfss
 [[ -n "$1" && "$1" = "--abfss" ]] && {
-	echo "run_azurite can only operate in --az mode, aborting." >&2
-	exit
+  echo "run_azurite can only operate in --az mode, aborting." >&2
+  exit
 }
 [[ -n "$1" && "$1" = "--az" ]] && {
-	# NOOP
-	shift
+  # NOOP
+  shift
 }
 
-exec "$@"
+exec env "$@"

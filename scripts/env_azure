@@ -60,4 +60,4 @@ export AZURE_PROVIDER=cloud
 	shift
 }
 
-exec "$@"
+exec env "$@"
