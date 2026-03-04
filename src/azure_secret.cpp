@@ -76,6 +76,7 @@ static unique_ptr<BaseSecret> CreateAzureSecretFromCredentialChain(ClientContext
 
 	// Manage specific secret option
 	CopySecret("chain", input, *result);
+	CopySecret("cache_token_credential", input, *result);
 
 	// Redact sensible keys
 	RedactCommonKeys(*result);
@@ -103,6 +104,7 @@ static unique_ptr<BaseSecret> CreateAzureSecretFromManagedIdentity(ClientContext
 	CopySecret("client_id", input, *result);
 	CopySecret("object_id", input, *result);
 	CopySecret("resource_id", input, *result);
+	CopySecret("cache_token_credential", input, *result);
 
 	// Redact sensible keys
 	RedactCommonKeys(*result);
@@ -131,6 +133,7 @@ static unique_ptr<BaseSecret> CreateAzureSecretFromServicePrincipal(ClientContex
 	CopySecret("client_id", input, *result);
 	CopySecret("client_secret", input, *result);
 	CopySecret("client_certificate_path", input, *result);
+	CopySecret("cache_token_credential", input, *result);
 
 	// Redact sensible keys
 	RedactCommonKeys(*result);
@@ -158,6 +161,7 @@ static unique_ptr<BaseSecret> CreateAzureSecretFromAccessToken(ClientContext &co
 
 	// Manage specific secret option
 	CopySecret("access_token", input, *result);
+	CopySecret("cache_token_credential", input, *result);
 
 	// Redact sensible keys
 	RedactCommonKeys(*result);
@@ -196,6 +200,7 @@ void CreateAzureSecretFunctions::Register(ExtensionLoader &loader) {
 	// Register the credential_chain secret provider
 	CreateSecretFunction cred_chain_function = {type, "credential_chain", CreateAzureSecretFromCredentialChain};
 	cred_chain_function.named_parameters["chain"] = LogicalType::VARCHAR;
+	cred_chain_function.named_parameters["cache_token_credential"] = LogicalType::BOOLEAN;
 	RegisterCommonSecretParameters(cred_chain_function);
 	loader.RegisterFunction(cred_chain_function);
 
@@ -204,6 +209,7 @@ void CreateAzureSecretFunctions::Register(ExtensionLoader &loader) {
 	managed_identity_function.named_parameters["client_id"] = LogicalType::VARCHAR;
 	managed_identity_function.named_parameters["object_id"] = LogicalType::VARCHAR;
 	managed_identity_function.named_parameters["resource_id"] = LogicalType::VARCHAR;
+	managed_identity_function.named_parameters["cache_token_credential"] = LogicalType::BOOLEAN;
 	RegisterCommonSecretParameters(managed_identity_function);
 	loader.RegisterFunction(managed_identity_function);
 
@@ -214,12 +220,14 @@ void CreateAzureSecretFunctions::Register(ExtensionLoader &loader) {
 	service_principal_function.named_parameters["client_id"] = LogicalType::VARCHAR;
 	service_principal_function.named_parameters["client_secret"] = LogicalType::VARCHAR;
 	service_principal_function.named_parameters["client_certificate_path"] = LogicalType::VARCHAR;
+	service_principal_function.named_parameters["cache_token_credential"] = LogicalType::BOOLEAN;
 	RegisterCommonSecretParameters(service_principal_function);
 	loader.RegisterFunction(service_principal_function);
 
 	// Register the access_token secret provider
 	CreateSecretFunction access_token_function = {type, "access_token", CreateAzureSecretFromAccessToken};
 	access_token_function.named_parameters["access_token"] = LogicalType::VARCHAR;
+	access_token_function.named_parameters["cache_token_credential"] = LogicalType::BOOLEAN;
 	RegisterCommonSecretParameters(access_token_function);
 	loader.RegisterFunction(access_token_function);
 }

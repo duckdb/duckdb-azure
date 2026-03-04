@@ -10,6 +10,7 @@
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "http_state_policy.hpp"
+#include "zstd/common/xxhash.hpp"
 
 #include <azure/core/credentials/token_credential_options.hpp>
 #include <azure/core/http/curl_transport.hpp>
@@ -237,13 +238,14 @@ struct AzureCredentialState : public ClientContextState {
 	std::string fingerprint;
 };
 
-static std::string SecretFingerprint(const KeyValueSecret &secret) {
-	std::string fp;
+static std::string FingerprintSecret(const KeyValueSecret &secret) {
+	std::string content;
 	// NOTE: this key ordering is safe because secret_map is an ordered tree
 	for (const auto &kv : secret.secret_map) {
-		fp += kv.first + "=" + kv.second.ToString() + ";";
+		content += kv.first + "=" + kv.second.ToString() + ";";
 	}
-	return fp;
+	auto hash = duckdb_zstd::XXH64(content.c_str(), content.size(), 0);
+	return std::to_string(hash);
 }
 
 static std::shared_ptr<Azure::Core::Credentials::TokenCredential>
@@ -259,8 +261,9 @@ GetCachedCredential(optional_ptr<FileOpener> opener, const std::string &key, con
 	return entry->credential;
 }
 
-static void CacheCredential(optional_ptr<FileOpener> opener, const std::string &key,
-                            std::shared_ptr<Azure::Core::Credentials::TokenCredential> cred, const std::string &fp) {
+static void CacheTokenCredential(optional_ptr<FileOpener> opener, const std::string &key,
+                                 std::shared_ptr<Azure::Core::Credentials::TokenCredential> cred,
+                                 const std::string &fp) {
 	auto ctx = FileOpener::TryGetClientContext(opener);
 	if (!ctx) {
 		return;
@@ -428,44 +431,48 @@ GetDfsStorageAccountClientFromConfigProvider(optional_ptr<FileOpener> opener, co
 	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, dfs_options);
 }
 
+// Retrieves a cached credential by fingerprint, or creates and caches a new one via create_fn.
+// If secret.cache_token_credential==false, then do not cache. (Useful e.g. when using the az cli,
+// to where a logout is expected to have effect on next query.)
+template <class CreateFn>
+static std::shared_ptr<Azure::Core::Credentials::TokenCredential>
+GetOrCreateCredential(optional_ptr<FileOpener> opener, const KeyValueSecret &secret, CreateFn create_fn) {
+	auto fp = FingerprintSecret(secret);
+	auto cache_key = std::string("azure_cred:secret:") + secret.GetName();
+	auto ctc_val = secret.TryGetValue("cache_token_credential");
+	auto use_cache = ctc_val.IsNull() || ctc_val.GetValue<bool>();
+	auto cred = use_cache ? GetCachedCredential(opener, cache_key, fp) : nullptr;
+	if (!cred) {
+		cred = create_fn();
+		if (use_cache) {
+			CacheTokenCredential(opener, cache_key, cred, fp);
+		}
+	}
+	return cred;
+}
+
 static Azure::Storage::Blobs::BlobServiceClient
 GetBlobStorageAccountClientFromCredentialChainProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                        const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto credential = GetCachedCredential(opener, cache_key, fp);
-	if (!credential) {
-		credential = CreateChainedTokenCredential(secret, transport_options);
-		CacheCredential(opener, cache_key, credential, fp);
-	}
-
-	// Connect to storage account
+	auto cred = GetOrCreateCredential(opener, secret,
+	                                  [&]() { return CreateChainedTokenCredential(secret, transport_options); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_BLOB_ENDPOINT);
 	auto blob_options = ToBlobClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Blobs::BlobServiceClient(account_url, std::move(credential), blob_options);
+	return Azure::Storage::Blobs::BlobServiceClient(account_url, std::move(cred), blob_options);
 }
 
 static Azure::Storage::Files::DataLake::DataLakeServiceClient
 GetDfsStorageAccountClientFromCredentialChainProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                       const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto credential = GetCachedCredential(opener, cache_key, fp);
-	if (!credential) {
-		credential = CreateChainedTokenCredential(secret, transport_options);
-		CacheCredential(opener, cache_key, credential, fp);
-	}
-
-	// Connect to storage account
+	auto cred = GetOrCreateCredential(opener, secret,
+	                                  [&]() { return CreateChainedTokenCredential(secret, transport_options); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_DFS_ENDPOINT);
 	auto dfs_options = ToDfsClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, std::move(credential), dfs_options);
+	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, std::move(cred), dfs_options);
 }
 
 static std::shared_ptr<Azure::Identity::ManagedIdentityCredential>
@@ -505,116 +512,70 @@ static Azure::Storage::Blobs::BlobServiceClient
 GetBlobStorageAccountClientFromManagedIdentityProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                        const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto credential = GetCachedCredential(opener, cache_key, fp);
-	if (!credential) {
-		credential = GetManagedIdentityCredential(opener, secret, transport_options);
-		CacheCredential(opener, cache_key, credential, fp);
-	}
-
-	// Connect to (blob) storage account
+	auto cred = GetOrCreateCredential(
+	    opener, secret, [&]() { return GetManagedIdentityCredential(opener, secret, transport_options); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_BLOB_ENDPOINT);
 	auto blob_options = ToBlobClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Blobs::BlobServiceClient(account_url, credential, blob_options);
+	return Azure::Storage::Blobs::BlobServiceClient(account_url, cred, blob_options);
 }
 
 static Azure::Storage::Files::DataLake::DataLakeServiceClient
 GetDfsStorageAccountClientFromManagedIdentityProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                       const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto credential = GetCachedCredential(opener, cache_key, fp);
-	if (!credential) {
-		credential = GetManagedIdentityCredential(opener, secret, transport_options);
-		CacheCredential(opener, cache_key, credential, fp);
-	}
-
-	// Connect to ADLS storage account
+	auto cred = GetOrCreateCredential(
+	    opener, secret, [&]() { return GetManagedIdentityCredential(opener, secret, transport_options); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_DFS_ENDPOINT);
 	auto dfs_options = ToDfsClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, credential, dfs_options);
+	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, cred, dfs_options);
 }
 
 static Azure::Storage::Blobs::BlobServiceClient
 GetBlobStorageAccountClientFromServicePrincipalProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                         const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto token_credential = GetCachedCredential(opener, cache_key, fp);
-	if (!token_credential) {
-		token_credential = CreateClientCredential(secret, transport_options);
-		CacheCredential(opener, cache_key, token_credential, fp);
-	}
-
+	auto cred =
+	    GetOrCreateCredential(opener, secret, [&]() { return CreateClientCredential(secret, transport_options); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_BLOB_ENDPOINT);
 	auto blob_options = ToBlobClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Blobs::BlobServiceClient(account_url, token_credential, blob_options);
+	return Azure::Storage::Blobs::BlobServiceClient(account_url, cred, blob_options);
 }
 
 static Azure::Storage::Files::DataLake::DataLakeServiceClient
 GetDfsStorageAccountClientFromServicePrincipalProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                        const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto token_credential = GetCachedCredential(opener, cache_key, fp);
-	if (!token_credential) {
-		token_credential = CreateClientCredential(secret, transport_options);
-		CacheCredential(opener, cache_key, token_credential, fp);
-	}
-
+	auto cred =
+	    GetOrCreateCredential(opener, secret, [&]() { return CreateClientCredential(secret, transport_options); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_DFS_ENDPOINT);
 	auto dfs_options = ToDfsClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, token_credential, dfs_options);
+	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, cred, dfs_options);
 }
 
 static Azure::Storage::Blobs::BlobServiceClient
 GetBlobStorageAccountClientFromAccessTokenProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                    const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto token_credential = GetCachedCredential(opener, cache_key, fp);
-	if (!token_credential) {
-		token_credential = CreateAccessTokenCredential(secret);
-		CacheCredential(opener, cache_key, token_credential, fp);
-	}
-
+	auto cred = GetOrCreateCredential(opener, secret, [&]() { return CreateAccessTokenCredential(secret); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_BLOB_ENDPOINT);
 	auto blob_options = ToBlobClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Blobs::BlobServiceClient(account_url, token_credential, blob_options);
+	return Azure::Storage::Blobs::BlobServiceClient(account_url, cred, blob_options);
 }
 
 static Azure::Storage::Files::DataLake::DataLakeServiceClient
 GetDfsStorageAccountClientFromAccessTokenProvider(optional_ptr<FileOpener> opener, const KeyValueSecret &secret,
                                                   const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
-
-	auto fp = SecretFingerprint(secret);
-	auto cache_key = std::string("azure_cred:") + secret.GetName();
-	auto token_credential = GetCachedCredential(opener, cache_key, fp);
-	if (!token_credential) {
-		token_credential = CreateAccessTokenCredential(secret);
-		CacheCredential(opener, cache_key, token_credential, fp);
-	}
-
+	auto cred = GetOrCreateCredential(opener, secret, [&]() { return CreateAccessTokenCredential(secret); });
 	auto account_url =
 	    azure_parsed_url.is_fully_qualified ? AccountUrl(azure_parsed_url) : AccountUrl(secret, DEFAULT_DFS_ENDPOINT);
 	auto dfs_options = ToDfsClientOptions(transport_options, GetHttpState(opener));
-	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, token_credential, dfs_options);
+	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, cred, dfs_options);
 }
 
 static Azure::Storage::Blobs::BlobServiceClient GetBlobStorageAccountClient(optional_ptr<FileOpener> opener,
@@ -704,9 +665,18 @@ static Azure::Storage::Blobs::BlobServiceClient GetBlobStorageAccountClient(opti
 	// Credential chain secret equivalent
 	auto credential_chain = TryGetCurrentSetting(opener, "azure_credential_chain");
 	if (!credential_chain.empty()) {
-		auto credential = CreateChainedTokenCredential(credential_chain, transport_options);
-
-		return Azure::Storage::Blobs::BlobServiceClient(account_url, std::move(credential), blob_options);
+		// Settings-based credentials use a singleton cache key; any change to
+		// azure_credential_chain (the only setting that determines credential type)
+		// produces a different fingerprint and evicts the cached credential.
+		auto cache_key = std::string("azure_cred:settings");
+		auto hash = duckdb_zstd::XXH64(credential_chain.c_str(), credential_chain.size(), 0);
+		auto fp = std::to_string(hash);
+		auto cred = GetCachedCredential(opener, cache_key, fp);
+		if (!cred) {
+			cred = CreateChainedTokenCredential(credential_chain, transport_options);
+			CacheTokenCredential(opener, cache_key, cred, fp);
+		}
+		return Azure::Storage::Blobs::BlobServiceClient(account_url, std::move(cred), blob_options);
 	}
 
 	// Anonymous

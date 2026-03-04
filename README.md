@@ -99,6 +99,28 @@ IDs may be specified.
 
 See also [Azure Identity Managed Identity Support](https://github.com/Azure/azure-sdk-for-cpp/tree/main/sdk/identity/azure-identity#managed-identity-support)
 
+### Token Credential Caching
+
+By default, credential objects are reused across SQL statements so the Azure SDK's internal token
+cache survives query boundaries and avoids redundant authentication round-trips. To disable this,
+set `CACHE_TOKEN_CREDENTIAL = false`:
+
+```sql
+CREATE SECRET secret_cli (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    CHAIN 'cli',
+    ACCOUNT_NAME '⟨storage account name⟩',
+    CACHE_TOKEN_CREDENTIAL false
+);
+```
+
+Updating or replacing an Azure secret invalidates its cached credential; the next query
+will create a fresh one. However, out-of-band credential changes — such as `az account logout` —
+cannot be detected and will not invalidate the cache. Setting `CACHE_TOKEN_CREDENTIAL = false`
+disables caching for that secret, so a new credential is created from scratch for each query,
+ensuring any behind-the-scenes credential changes are picked up promptly.
+
 ## Supported architectures
 
 The extension is tested & distributed for Linux (x64, arm64), MacOS (x64, arm64) and Windows (x64)
@@ -122,4 +144,4 @@ cd duckdb_azure
 GEN=ninja VCPKG_TOOLCHAIN_PATH=$PWD/../vcpkg/scripts/buildsystems/vcpkg.cmake make
 ```
 
-Please also refer to our [Build Guide](https://duckdb.org/dev/building) and [Contribution Guide]([CONTRIBUTING.md](https://github.com/duckdb/duckdb/blob/main/CONTRIBUTING.md)).
+Please also refer to our [Build Guide](https://duckdb.org/dev/building) and [Contribution Guide](<[CONTRIBUTING.md](https://github.com/duckdb/duckdb/blob/main/CONTRIBUTING.md)>).
