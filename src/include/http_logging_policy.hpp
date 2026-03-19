@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/shared_ptr.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include <azure/core/context.hpp>
 #include <azure/core/http/http.hpp>
 #include <azure/core/http/policies/policy.hpp>
@@ -25,6 +26,9 @@ public:
 	std::unique_ptr<Azure::Core::Http::Policies::HttpPolicy> Clone() const override;
 
 private:
+	void LogRequest(Azure::Core::Http::Request &request, timestamp_t start_time, timestamp_t end_time,
+	                const Azure::Core::Http::RawResponse *response) const;
+
 	shared_ptr<Logger> logger;
 	std::unordered_set<std::string> redact_query_params;
 	std::unordered_set<std::string> redact_headers;

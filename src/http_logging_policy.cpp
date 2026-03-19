@@ -1,6 +1,9 @@
 #include "http_logging_policy.hpp"
 #include <azure/core/http/http.hpp>
+#include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/enums/http_status_code.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/logging/log_type.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -79,44 +82,50 @@ static std::string RedactUrlQueryParams(const std::string &url, const std::unord
 	return result;
 }
 
-std::unique_ptr<Azure::Core::Http::RawResponse>
-HttpLoggingPolicy::Send(Azure::Core::Http::Request &request,
-                        Azure::Core::Http::Policies::NextHttpPolicy next_policy,
-                        Azure::Core::Context const &context) const {
-	auto result = next_policy.Send(request, context);
-
-	if (logger && logger->ShouldLog(HTTPLogType::NAME, HTTPLogType::LEVEL)) {
-		// Build request struct
-		auto logged_url = RedactUrlQueryParams(request.GetUrl().GetAbsoluteUrl(), redact_query_params);
-		child_list_t<Value> request_fields = {
-		    {"type", Value(request.GetMethod().ToString())},
-		    {"url", Value(logged_url)},
-		    {"start_time", Value()},
-		    {"duration_ms", Value()},
-		    {"headers", CreateAzureHeadersValue(request.GetHeaders(), redact_headers)},
-		};
-		auto request_value = Value::STRUCT(std::move(request_fields));
-
-		// Build response struct (if available)
-		Value response_value;
-		if (result) {
-			child_list_t<Value> response_fields = {
-			    {"status", Value(std::to_string(static_cast<int>(result->GetStatusCode())))},
-			    {"reason", Value(result->GetReasonPhrase())},
-			    {"headers", CreateAzureHeadersValue(result->GetHeaders(), {})},
-			};
-			response_value = Value::STRUCT(std::move(response_fields));
-		}
-
-		child_list_t<Value> top_fields = {
-		    {"request", std::move(request_value)},
-		    {"response", std::move(response_value)},
-		};
-		auto log_message = Value::STRUCT(std::move(top_fields)).ToString();
-
-		logger->WriteLog(HTTPLogType::NAME, HTTPLogType::LEVEL, log_message);
+// Modeled after httpfs ext LogRequest
+void HttpLoggingPolicy::LogRequest(Azure::Core::Http::Request &request, timestamp_t start_time, timestamp_t end_time,
+                                   const Azure::Core::Http::RawResponse *response) const {
+	if (!logger || !logger->ShouldLog(HTTPLogType::NAME, HTTPLogType::LEVEL)) {
+		return;
 	}
+	auto duration_ms = Timestamp::GetEpochMs(end_time) - Timestamp::GetEpochMs(start_time);
+	auto logged_url = RedactUrlQueryParams(request.GetUrl().GetAbsoluteUrl(), redact_query_params);
+	child_list_t<Value> request_fields = {
+	    {"type", Value(request.GetMethod().ToString())},
+	    {"url", Value(logged_url)},
+	    {"start_time", Value::TIMESTAMPTZ(timestamp_tz_t(start_time))},
+	    {"duration_ms", Value::BIGINT(duration_ms)},
+	    {"headers", CreateAzureHeadersValue(request.GetHeaders(), redact_headers)},
+	};
+	Value resp_value;
+	if (response) {
+		auto duckdb_status = static_cast<HTTPStatusCode>(static_cast<int>(response->GetStatusCode()));
+		child_list_t<Value> response_fields = {
+		    {"status", Value(EnumUtil::ToString(duckdb_status))},
+		    {"reason", Value(response->GetReasonPhrase())},
+		    {"headers", CreateAzureHeadersValue(response->GetHeaders(), {})},
+		};
+		resp_value = Value::STRUCT(std::move(response_fields));
+	}
+	child_list_t<Value> top_fields = {
+	    {"request", Value::STRUCT(std::move(request_fields))},
+	    {"response", std::move(resp_value)},
+	};
+	logger->WriteLog(HTTPLogType::NAME, HTTPLogType::LEVEL, Value::STRUCT(std::move(top_fields)).ToString());
+}
 
+std::unique_ptr<Azure::Core::Http::RawResponse>
+HttpLoggingPolicy::Send(Azure::Core::Http::Request &request, Azure::Core::Http::Policies::NextHttpPolicy next_policy,
+                        Azure::Core::Context const &context) const {
+	auto start_time = Timestamp::GetCurrentTimestamp();
+	std::unique_ptr<Azure::Core::Http::RawResponse> result;
+	try {
+		result = next_policy.Send(request, context);
+	} catch (...) {
+		LogRequest(request, start_time, Timestamp::GetCurrentTimestamp(), nullptr);
+		throw;
+	}
+	LogRequest(request, start_time, Timestamp::GetCurrentTimestamp(), result.get());
 	return result;
 }
 
