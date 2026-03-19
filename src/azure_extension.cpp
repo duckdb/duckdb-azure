@@ -34,8 +34,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("azure_http_stats",
 	                          "Include http info from the Azure Storage in the explain analyze statement.",
 	                          LogicalType::BOOLEAN, false);
-	config.AddExtensionOption("azure_http_logging",
-	                          "Log HTTP requests made by the Azure extension to the DuckDB log.",
+	config.AddExtensionOption("azure_http_logging", "Log HTTP requests made by the Azure extension to the DuckDB log.",
 	                          LogicalType::BOOLEAN, false);
 	config.AddExtensionOption(
 	    "azure_http_logging_redact_query_params",

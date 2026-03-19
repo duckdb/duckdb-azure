@@ -113,7 +113,7 @@ static T ToClientOptions(const Azure::Core::Http::Policies::TransportOptions &tr
 			    !redact_query_params_value.IsNull()) {
 				for (auto &param : StringUtil::Split(redact_query_params_value.GetValue<std::string>(), ';')) {
 					auto trimmed = param;
-						StringUtil::Trim(trimmed);
+					StringUtil::Trim(trimmed);
 					if (!trimmed.empty()) {
 						redact_query_params.insert(trimmed);
 					}
@@ -121,22 +121,20 @@ static T ToClientOptions(const Azure::Core::Http::Policies::TransportOptions &tr
 			}
 
 			Value redact_headers_value;
-			if (FileOpener::TryGetCurrentSetting(opener, "azure_http_logging_redact_headers",
-			                                     redact_headers_value) &&
+			if (FileOpener::TryGetCurrentSetting(opener, "azure_http_logging_redact_headers", redact_headers_value) &&
 			    !redact_headers_value.IsNull()) {
 				for (auto &hdr : StringUtil::Split(redact_headers_value.GetValue<std::string>(), ';')) {
 					auto trimmed = hdr;
-						StringUtil::Trim(trimmed);
-						trimmed = StringUtil::Lower(trimmed);
+					StringUtil::Trim(trimmed);
+					trimmed = StringUtil::Lower(trimmed);
 					if (!trimmed.empty()) {
 						redact_headers.insert(trimmed);
 					}
 				}
 			}
 
-			options.PerRetryPolicies.emplace_back(
-			    new HttpLoggingPolicy(client_context->logger, std::move(redact_query_params),
-			                         std::move(redact_headers)));
+			options.PerRetryPolicies.emplace_back(new HttpLoggingPolicy(
+			    client_context->logger, std::move(redact_query_params), std::move(redact_headers)));
 		}
 	}
 	return options;
