@@ -103,7 +103,7 @@ void HttpLoggingPolicy::LogRequest(Azure::Core::Http::Request &request, timestam
 		child_list_t<Value> response_fields = {
 		    {"status", Value(EnumUtil::ToString(duckdb_status))},
 		    {"reason", Value(response->GetReasonPhrase())},
-		    {"headers", CreateAzureHeadersValue(response->GetHeaders(), {})},
+		    {"headers", CreateAzureHeadersValue(response->GetHeaders(), redact_headers)},
 		};
 		resp_value = Value::STRUCT(std::move(response_fields));
 	}

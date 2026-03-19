@@ -82,12 +82,21 @@ WHERE request.headers['x-ms-date'] IS NOT NULL
 ----
 true
 
-# x-ms-version must be redacted if present
+# x-ms-version must be redacted in request headers if present
 query I
 SELECT count(*) = 0
 FROM duckdb_logs_parsed('HTTP')
 WHERE request.headers['x-ms-version'] IS NOT NULL
   AND request.headers['x-ms-version'] != 'REDACTED';
+----
+true
+
+# x-ms-version must also be redacted in response headers if present (redaction applies to both sides)
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE response.headers['x-ms-version'] IS NOT NULL
+  AND response.headers['x-ms-version'] != 'REDACTED';
 ----
 true
 
