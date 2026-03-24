@@ -76,16 +76,32 @@ static std::string AccountUrl(const AzureParsedUrl &azure_parsed_url) {
 	return AccountUrl(azure_parsed_url.storage_account_name, azure_parsed_url.endpoint);
 }
 
+// Sets the User-Agent header to the DuckDB-generated value, overriding the Azure SDK telemetry header.
+// Registered as a PerRetryPolicy so it runs after the SDK's built-in telemetry policy.
+class UserAgentPolicy : public Azure::Core::Http::Policies::HttpPolicy {
+public:
+	explicit UserAgentPolicy(std::string user_agent_p) : user_agent(std::move(user_agent_p)) {
+	}
+	std::unique_ptr<Azure::Core::Http::RawResponse> Send(Azure::Core::Http::Request &request,
+	                                                     Azure::Core::Http::Policies::NextHttpPolicy next_policy,
+	                                                     Azure::Core::Context const &context) const override {
+		request.SetHeader("User-Agent", user_agent);
+		return next_policy.Send(request, context);
+	}
+	std::unique_ptr<Azure::Core::Http::Policies::HttpPolicy> Clone() const override {
+		return std::unique_ptr<Azure::Core::Http::Policies::HttpPolicy>(new UserAgentPolicy(user_agent));
+	}
+
+private:
+	std::string user_agent;
+};
+
 template <typename T>
 static T ToClientOptions(const Azure::Core::Http::Policies::TransportOptions &transport_options,
                          shared_ptr<AzureHTTPState> http_state, optional_ptr<FileOpener> opener) {
 	static_assert(std::is_base_of<Azure::Core::_internal::ClientOptions, T>::value,
 	              "type parameter must be an Azure ClientOptions");
 	T options;
-	auto db = FileOpener::TryGetDatabase(opener);
-	if (db) {
-		options.Telemetry.ApplicationId = StringUtil::Format("%s %s", db->config.UserAgent(), DuckDB::SourceID());
-	}
 	options.Transport = transport_options;
 	if (http_state != nullptr) {
 		// Because we mainly want to have stats on what has been needed and not on
@@ -94,7 +110,14 @@ static T ToClientOptions(const Azure::Core::Http::Policies::TransportOptions &tr
 		// increase the input/output but will not be displayed in the EXPLAIN summary.
 		options.PerOperationPolicies.emplace_back(new HttpStatePolicy(std::move(http_state)));
 	}
-	// Add HTTP logging policy (per-retry, so user-agent is already set by the telemetry policy).
+	// Set DuckDB user-agent (per-retry, overrides user-agent after the SDK's built-in telemetry policy)
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		options.PerRetryPolicies.emplace_back(
+		    new UserAgentPolicy(StringUtil::Format("%s %s", db->config.UserAgent(), DuckDB::SourceID())));
+	}
+
+	// Add HTTP logging policy (per-retry, so user-agent is already set above).
 	// Logging follows DuckDB's HTTP log settings by default; azure_http_logging=false disables it.
 	Value enable_http_logging_value;
 	bool http_logging_enabled = true;
