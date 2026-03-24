@@ -13,9 +13,6 @@ statement ok
 CALL enable_logging('HTTP');
 
 statement ok
-SET azure_http_logging = true;
-
-statement ok
 SELECT sum(l_orderkey) FROM 'az://testing-private/l.csv';
 
 # Verify that at least one HTTP log entry was recorded

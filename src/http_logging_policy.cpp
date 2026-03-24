@@ -85,7 +85,7 @@ static std::string RedactUrlQueryParams(const std::string &url, const std::unord
 // Modeled after httpfs ext LogRequest
 void HttpLoggingPolicy::LogRequest(Azure::Core::Http::Request &request, timestamp_t start_time, timestamp_t end_time,
                                    const Azure::Core::Http::RawResponse *response) const {
-	if (!logger || !logger->ShouldLog(HTTPLogType::NAME, HTTPLogType::LEVEL)) {
+	if (!logger || !logger->IsThreadSafe() || !logger->ShouldLog(HTTPLogType::NAME, HTTPLogType::LEVEL)) {
 		return;
 	}
 	auto duration_ms = Timestamp::GetEpochMs(end_time) - Timestamp::GetEpochMs(start_time);

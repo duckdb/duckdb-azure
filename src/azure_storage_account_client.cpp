@@ -94,13 +94,14 @@ static T ToClientOptions(const Azure::Core::Http::Policies::TransportOptions &tr
 		// increase the input/output but will not be displayed in the EXPLAIN summary.
 		options.PerOperationPolicies.emplace_back(new HttpStatePolicy(std::move(http_state)));
 	}
-	// Add HTTP logging policy (per-retry, so user-agent is already set by the telemetry policy)
+	// Add HTTP logging policy (per-retry, so user-agent is already set by the telemetry policy).
+	// Logging follows DuckDB's HTTP log settings by default; azure_http_logging=false disables it.
 	Value enable_http_logging_value;
-	bool enable_http_logging = false;
+	bool http_logging_enabled = true;
 	if (FileOpener::TryGetCurrentSetting(opener, "azure_http_logging", enable_http_logging_value)) {
-		enable_http_logging = enable_http_logging_value.GetValue<bool>();
+		http_logging_enabled = enable_http_logging_value.GetValue<bool>();
 	}
-	if (enable_http_logging) {
+	if (http_logging_enabled) {
 		auto client_context = FileOpener::TryGetClientContext(opener);
 		if (client_context && client_context->logger) {
 			// Read redaction config options
