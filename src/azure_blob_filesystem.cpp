@@ -439,7 +439,8 @@ void AzureBlobStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t
 }
 
 void AzureBlobStorageFileSystem::FileSync(FileHandle &handle) {
-	Cast<AzureBlobStorageFileHandle>().Sync();
+	auto &afh = handle.Cast<AzureBlobStorageFileHandle>();
+	afh.Sync();
 }
 
 } // namespace duckdb
