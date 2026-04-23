@@ -77,3 +77,15 @@ TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
 );
 ----
 is not empty
+
+# Confirm compressed write (see https://github.com/duckdb/duckdb-azure/issues/157)
+# Issue is in duckdb CompressedFile::Close but we verify here.
+statement ok
+COPY (SELECT 1 AS test) TO 'az://${AZ_TEMP_DIR}/compressed-1.csv.gz'; -- (COMPRESSION gzip);
+
+# Confirm compression worked
+query I
+FROM 'az://${AZ_TEMP_DIR}/compressed-1.csv.gz';
+----
+1
+
