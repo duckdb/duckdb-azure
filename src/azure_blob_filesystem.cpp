@@ -74,8 +74,10 @@ AzureBlobContextState::GetBlobContainerClient(const std::string &blobContainerNa
 //////// AzureBlobStorageFileHandle ////////
 AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info,
                                                        FileOpenFlags flags, const AzureReadOptions &read_options,
+                                                       optional_ptr<AzureMetadataCache> metadata_cache,
                                                        Azure::Storage::Blobs::BlockBlobClient blob_client)
-    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options), blob_client(std::move(blob_client)) {
+    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, read_options, metadata_cache),
+      blob_client(std::move(blob_client)) {
 }
 
 void AzureBlobStorageFileHandle::Sync() {
@@ -123,11 +125,14 @@ unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenF
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		InvalidateMetadata(opener, info.path);
+	}
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(parsed_url.container);
 	auto blob_client = container.GetBlockBlobClient(parsed_url.path);
 
 	auto handle = make_uniq<AzureBlobStorageFileHandle>(*this, info, flags, storage_context->read_options,
-	                                                    std::move(blob_client));
+	                                                    GetMetadataCache(opener), std::move(blob_client));
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -192,6 +197,7 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 				OpenFileInfo info(result_full_url);
 				info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 				auto &options = info.extended_info->options;
+				options.emplace("type", Value("file"));
 				options.emplace("file_size", Value::BIGINT(key.BlobSize));
 				options.emplace("last_modified", Value::TIMESTAMP(ToTimestamp(key.Details.LastModified)));
 				result.push_back(info);
@@ -282,11 +288,7 @@ void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	// - doesn't exist, don't create
 
 	auto set_props = [&](bool is_dir, idx_t length, timestamp_t last_mod) {
-		afh.is_remote_loaded = true; // always set loaded
-		afh.file_type = is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR;
-		afh.length = is_dir ? 0 : length;
-		afh.last_modified = last_mod;
-		afh.file_offset = 0; // always reset offset state
+		afh.SetFileInfo(is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR, length, last_mod);
 	};
 
 	auto create_file = [&]() {
@@ -367,6 +369,7 @@ void AzureBlobStorageFileSystem::RemoveFile(const string &filename, optional_ptr
 	auto blob_client = container.GetBlockBlobClient(url.path);
 	try {
 		blob_client.Delete();
+		InvalidateMetadata(opener, filename);
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureBlobStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -378,7 +381,11 @@ bool AzureBlobStorageFileSystem::TryRemoveFile(const string &filename, optional_
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(url.container);
 	auto blob_client = container.GetBlockBlobClient(url.path);
-	return blob_client.DeleteIfExists().Value.Deleted;
+	auto removed = blob_client.DeleteIfExists().Value.Deleted;
+	if (removed) {
+		InvalidateMetadata(opener, filename);
+	}
+	return removed;
 }
 
 void AzureBlobStorageFileSystem::ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out,

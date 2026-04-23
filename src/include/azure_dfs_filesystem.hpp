@@ -29,7 +29,7 @@ class AzureDfsStorageFileSystem;
 class AzureDfsStorageFileHandle : public AzureFileHandle {
 public:
 	AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-	                          const AzureReadOptions &read_options,
+	                          const AzureReadOptions &read_options, optional_ptr<AzureMetadataCache> metadata_cache,
 	                          Azure::Storage::Files::DataLake::DataLakeFileClient client);
 	~AzureDfsStorageFileHandle() override = default;
 
