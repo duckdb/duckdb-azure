@@ -4,7 +4,9 @@
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/common/shared_ptr.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/main/client_context_state.hpp"
 
@@ -25,6 +27,77 @@ struct AzureOptions {
 	idx_t read_buffer_size = (idx_t)8 * 1024 * 1024;
 	idx_t write_block_size = WRITE_BLOCK_SIZE_DEFAULT;
 	idx_t write_staged_blocks_per_commit = 0;
+};
+
+struct AzureFileInfo {
+	FileType file_type = FileType::FILE_TYPE_INVALID;
+	idx_t length = 0;
+	timestamp_t last_modified;
+	string etag;
+};
+
+class AzureMetadataCache : public ClientContextState {
+public:
+	explicit AzureMetadataCache(bool flush_on_query_end_p, bool shared_p)
+	    : flush_on_query_end(flush_on_query_end_p), shared(shared_p) {
+	}
+
+	void Insert(const string &path, const AzureFileInfo &val) {
+		if (shared) {
+			lock_guard<mutex> parallel_lock(lock);
+			map[path] = val;
+		} else {
+			map[path] = val;
+		}
+	}
+
+	void Erase(const string &path) {
+		if (shared) {
+			lock_guard<mutex> parallel_lock(lock);
+			map.erase(path);
+		} else {
+			map.erase(path);
+		}
+	}
+
+	bool Find(const string &path, AzureFileInfo &ret_val) {
+		if (shared) {
+			lock_guard<mutex> parallel_lock(lock);
+			auto lookup = map.find(path);
+			if (lookup == map.end()) {
+				return false;
+			}
+			ret_val = lookup->second;
+			return true;
+		}
+		auto lookup = map.find(path);
+		if (lookup == map.end()) {
+			return false;
+		}
+		ret_val = lookup->second;
+		return true;
+	}
+
+	void Clear() {
+		if (shared) {
+			lock_guard<mutex> parallel_lock(lock);
+			map.clear();
+		} else {
+			map.clear();
+		}
+	}
+
+	void QueryEnd(ClientContext &context) override {
+		if (flush_on_query_end) {
+			Clear();
+		}
+	}
+
+private:
+	mutex lock;
+	unordered_map<string, AzureFileInfo> map;
+	bool flush_on_query_end;
+	bool shared;
 };
 
 class AzureContextState : public ClientContextState {
@@ -58,6 +131,7 @@ class AzureStorageFileSystem;
 class AzureFileHandle : public FileHandle {
 public:
 	virtual bool PostConstruct();
+	void SetFileInfo(FileType file_type_p, idx_t length_p, timestamp_t last_modified_p, const string &etag_p);
 
 	bool IsRemoteLoaded() {
 		return is_remote_loaded;
@@ -69,7 +143,7 @@ public:
 
 protected:
 	AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags, FileType file_type,
-	                const AzureOptions &options);
+	                const AzureOptions &options, optional_ptr<AzureMetadataCache> metadata_cache);
 
 public:
 	FileOpenFlags flags;
@@ -89,8 +163,8 @@ public:
 	idx_t file_offset;
 	idx_t buffer_start;
 	idx_t buffer_end;
-
 	const AzureOptions options;
+	optional_ptr<AzureMetadataCache> metadata_cache;
 };
 
 class AzureStorageFileSystem : public FileSystem {
@@ -142,10 +216,18 @@ protected:
 
 	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
 	static AzureOptions ParseAzureOptions(optional_ptr<FileOpener> opener);
+	static bool ParseAzureMetadataCacheEnabled(optional_ptr<FileOpener> opener);
+	optional_ptr<AzureMetadataCache> GetMetadataCache(optional_ptr<FileOpener> opener);
+	void InvalidateMetadata(optional_ptr<FileOpener> opener, const string &path);
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);
 	static string StripETagQuotes(string etag);
+
+private:
+	optional_ptr<AzureMetadataCache> GetGlobalMetadataCache();
+	mutex global_cache_lock;
+	duckdb::unique_ptr<AzureMetadataCache> global_metadata_cache;
 };
 
 } // namespace duckdb
