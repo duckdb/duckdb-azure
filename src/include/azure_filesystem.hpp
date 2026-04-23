@@ -13,6 +13,7 @@
 #include <azure/core/datetime.hpp>
 #include <cstdint>
 #include <ctime>
+#include <shared_mutex>
 
 namespace duckdb {
 
@@ -44,7 +45,7 @@ public:
 
 	void Insert(const string &path, const AzureFileInfo &val) {
 		if (shared) {
-			lock_guard<mutex> parallel_lock(lock);
+			unique_lock<std::shared_mutex> parallel_lock(lock);
 			map[path] = val;
 		} else {
 			map[path] = val;
@@ -53,7 +54,7 @@ public:
 
 	void Erase(const string &path) {
 		if (shared) {
-			lock_guard<mutex> parallel_lock(lock);
+			unique_lock<std::shared_mutex> parallel_lock(lock);
 			map.erase(path);
 		} else {
 			map.erase(path);
@@ -62,7 +63,7 @@ public:
 
 	bool Find(const string &path, AzureFileInfo &ret_val) {
 		if (shared) {
-			lock_guard<mutex> parallel_lock(lock);
+			std::shared_lock<std::shared_mutex> parallel_lock(lock);
 			auto lookup = map.find(path);
 			if (lookup == map.end()) {
 				return false;
@@ -80,7 +81,7 @@ public:
 
 	void Clear() {
 		if (shared) {
-			lock_guard<mutex> parallel_lock(lock);
+			unique_lock<std::shared_mutex> parallel_lock(lock);
 			map.clear();
 		} else {
 			map.clear();
@@ -94,7 +95,7 @@ public:
 	}
 
 private:
-	mutex lock;
+	std::shared_mutex lock;
 	unordered_map<string, AzureFileInfo> map;
 	bool flush_on_query_end;
 	bool shared;
