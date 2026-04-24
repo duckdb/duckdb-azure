@@ -155,7 +155,9 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 	auto first_wildcard_pos = azure_url.path.find_first_of("*[\\");
 	if (first_wildcard_pos == string::npos) {
 		vector<OpenFileInfo> rv;
-		if (FileExists(path, opener)) {
+		auto handle = OpenFile(path, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
+		// Returning directories here suppresses DuckDB's fallback auto-glob path for multi-file readers.
+		if (handle && handle->Cast<AzureBlobStorageFileHandle>().GetType() == FileType::FILE_TYPE_REGULAR) {
 			rv.emplace_back(path);
 		}
 		return rv;
@@ -355,7 +357,11 @@ bool AzureBlobStorageFileSystem::DirectoryExists(const string &dirname, optional
 
 bool AzureBlobStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
 	auto handle = OpenFile(filename, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
-	return handle && handle->Cast<AzureBlobStorageFileHandle>().GetType() == FileType::FILE_TYPE_REGULAR;
+	if (handle != nullptr) {
+		auto &sfh = handle->Cast<AzureBlobStorageFileHandle>();
+		return sfh.length >= 0; // aka return true; -- avoid optimizers and shenanigans -- deref handle to be sure
+	}
+	return false;
 }
 
 void AzureBlobStorageFileSystem::RemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
