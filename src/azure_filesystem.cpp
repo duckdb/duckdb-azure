@@ -115,7 +115,7 @@ bool AzureStorageFileSystem::ParseAzureMetadataCacheEnabled(optional_ptr<FileOpe
 optional_ptr<AzureMetadataCache> AzureStorageFileSystem::GetGlobalMetadataCache() {
 	lock_guard<mutex> lock(global_cache_lock);
 	if (!global_metadata_cache) {
-		global_metadata_cache = make_uniq<AzureMetadataCache>(false, true);
+		global_metadata_cache = make_uniq<AzureMetadataCache>(false);
 	}
 	return global_metadata_cache.get();
 }
@@ -130,8 +130,7 @@ optional_ptr<AzureMetadataCache> AzureStorageFileSystem::GetMetadataCache(option
 		return GetGlobalMetadataCache();
 	}
 	if (client_context) {
-		return client_context->registered_state->GetOrCreate<AzureMetadataCache>("azure_metadata_cache", true, false)
-		    .get();
+		return client_context->registered_state->GetOrCreate<AzureMetadataCache>("azure_metadata_cache", true).get();
 	}
 	return nullptr;
 }

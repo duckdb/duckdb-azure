@@ -31,38 +31,21 @@ struct AzureFileInfo {
 
 class AzureMetadataCache : public ClientContextState {
 public:
-	explicit AzureMetadataCache(bool flush_on_query_end_p, bool shared_p)
-	    : flush_on_query_end(flush_on_query_end_p), shared(shared_p) {
+	explicit AzureMetadataCache(bool flush_on_query_end_p) : flush_on_query_end(flush_on_query_end_p) {
 	}
 
 	void Insert(const string &path, const AzureFileInfo &val) {
-		if (shared) {
-			unique_lock<std::shared_mutex> parallel_lock(lock);
-			map[path] = val;
-		} else {
-			map[path] = val;
-		}
+		unique_lock<std::shared_mutex> parallel_lock(lock);
+		map[path] = val;
 	}
 
 	void Erase(const string &path) {
-		if (shared) {
-			unique_lock<std::shared_mutex> parallel_lock(lock);
-			map.erase(path);
-		} else {
-			map.erase(path);
-		}
+		unique_lock<std::shared_mutex> parallel_lock(lock);
+		map.erase(path);
 	}
 
 	bool Find(const string &path, AzureFileInfo &ret_val) {
-		if (shared) {
-			std::shared_lock<std::shared_mutex> parallel_lock(lock);
-			auto lookup = map.find(path);
-			if (lookup == map.end()) {
-				return false;
-			}
-			ret_val = lookup->second;
-			return true;
-		}
+		std::shared_lock<std::shared_mutex> parallel_lock(lock);
 		auto lookup = map.find(path);
 		if (lookup == map.end()) {
 			return false;
@@ -72,12 +55,8 @@ public:
 	}
 
 	void Clear() {
-		if (shared) {
-			unique_lock<std::shared_mutex> parallel_lock(lock);
-			map.clear();
-		} else {
-			map.clear();
-		}
+		unique_lock<std::shared_mutex> parallel_lock(lock);
+		map.clear();
 	}
 
 	void QueryEnd(ClientContext &context) override {
@@ -87,10 +66,10 @@ public:
 	}
 
 private:
+	// Query-local caches are still shared across parallel tasks within a query.
 	std::shared_mutex lock;
 	unordered_map<string, AzureFileInfo> map;
 	bool flush_on_query_end;
-	bool shared;
 };
 
 class AzureContextState : public ClientContextState {
