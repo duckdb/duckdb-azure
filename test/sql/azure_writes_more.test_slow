@@ -13,7 +13,7 @@ require-env AZURE_STORAGE_CONNECTION_STRING
 statement ok
 CREATE SECRET s1 (
     TYPE azure,
-    CONNECTION_STRING '${AZURE_STORAGE_CONNECTION_STRING}'
+    CONNECTION_STRING '{AZURE_STORAGE_CONNECTION_STRING}'
 );
 
 ## Many small writes - 1k
@@ -24,8 +24,8 @@ foreach j 0 1 2 3 4 5 6 7 8 9
 foreach k 0 1 2 3 4 5 6 7 8 9
 
 statement ok
-COPY (SELECT id: '${i}${j}${k}'::INT) 
-TO 'az://${AZ_TEMP_DIR}/many/write-sequential-${i}${j}${k}.csv';
+COPY (SELECT id: '{i}{j}{k}'::INT) 
+TO 'az://{AZ_TEMP_DIR}/many/write-sequential-{i}{j}{k}.csv';
 
 endloop
 
@@ -35,7 +35,7 @@ endloop
 
 # Read it back as a sum: n*(n+1) / 2
 query I 
-SELECT sum(id) FROM 'az://${AZ_TEMP_DIR}/many/write-sequential-*.csv';
+SELECT sum(id) FROM 'az://{AZ_TEMP_DIR}/many/write-sequential-*.csv';
 ----
 499500
 
@@ -45,16 +45,16 @@ concurrentloop i 0 100
 
 statement ok
 COPY (
-	SELECT id: ('${i}'::INT * 100) + generate_series
+	SELECT id: ('{i}'::INT * 100) + generate_series
 	FROM generate_series(0, 99)
 )
-TO 'az://${AZ_TEMP_DIR}/many/write-concurrent-${i}.csv';
+TO 'az://{AZ_TEMP_DIR}/many/write-concurrent-{i}.csv';
 
 endloop
 
 # Read it back as a sum: n*(n+1) / 2
 query I 
-SELECT sum(id) FROM 'az://${AZ_TEMP_DIR}/many/write-concurrent-*.csv';
+SELECT sum(id) FROM 'az://{AZ_TEMP_DIR}/many/write-concurrent-*.csv';
 ----
 49995000
 
@@ -72,18 +72,18 @@ SELECT sum(l_orderkey) FROM lineitem;
 # Now the big copy, csv file
 statement ok
 COPY (FROM lineitem CROSS JOIN generate_series(1, 10))
-TO 'az://${AZ_TEMP_DIR}/big/lineitem.csv';
+TO 'az://{AZ_TEMP_DIR}/big/lineitem.csv';
 
 # and confirm result from copy
 query I
-SELECT sum(l_orderkey) FROM 'az://${AZ_TEMP_DIR}/big/lineitem.csv';
+SELECT sum(l_orderkey) FROM 'az://{AZ_TEMP_DIR}/big/lineitem.csv';
 ----
 18027595730
 
 # Finale: Same but different -- csv -> parquet, and hive partitioned
 statement ok
 COPY (FROM lineitem CROSS JOIN generate_series(1, 10))
-TO 'az://${AZ_TEMP_DIR}/big/lineitem-partitioned' (
+TO 'az://{AZ_TEMP_DIR}/big/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_returnflag, l_linestatus),
 	OVERWRITE_OR_IGNORE true
@@ -93,7 +93,7 @@ TO 'az://${AZ_TEMP_DIR}/big/lineitem-partitioned' (
 query I
 SELECT sum(l_orderkey) 
 FROM read_parquet(
-	'az://${AZ_TEMP_DIR}/big/lineitem-partitioned/*/*/*.parquet', 
+	'az://{AZ_TEMP_DIR}/big/lineitem-partitioned/*/*/*.parquet', 
 	HIVE_PARTITIONING = true
 )
 ----

@@ -15,7 +15,7 @@ CALL enable_logging('FileSystem', level='trace');
 statement ok
 CREATE SECRET s1 (
     TYPE AZURE,
-    CONNECTION_STRING '${AZURE_STORAGE_CONNECTION_STRING}'
+    CONNECTION_STRING '{AZURE_STORAGE_CONNECTION_STRING}'
 )
 
 # Read a column from a csv file
