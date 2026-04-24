@@ -13,17 +13,17 @@ require-env AZURE_STORAGE_CONNECTION_STRING
 statement ok
 CREATE SECRET s1 (
     TYPE azure,
-    CONNECTION_STRING '${AZURE_STORAGE_CONNECTION_STRING}'
+    CONNECTION_STRING '{AZURE_STORAGE_CONNECTION_STRING}'
 );
 
 ## Basic write & read
 query I
-COPY (SELECT id: 42) TO 'az://${AZ_TEMP_DIR}/write-id-42.csv';
+COPY (SELECT id: 42) TO 'az://{AZ_TEMP_DIR}/write-id-42.csv';
 ----
 1
 
 query I
-SELECT id FROM 'az://${AZ_TEMP_DIR}/write-id-42.csv';
+SELECT id FROM 'az://{AZ_TEMP_DIR}/write-id-42.csv';
 ----
 42
 
@@ -40,18 +40,18 @@ SELECT sum(l_orderkey) FROM lineitem;
 # Copy to CSV
 statement ok
 COPY lineitem
-TO 'az://${AZ_TEMP_DIR}/lineitem-copied.csv';
+TO 'az://{AZ_TEMP_DIR}/lineitem-copied.csv';
 
 # ... and confirm result from copy
 query I
-SELECT sum(l_orderkey) FROM 'az://${AZ_TEMP_DIR}/lineitem-copied.csv';
+SELECT sum(l_orderkey) FROM 'az://{AZ_TEMP_DIR}/lineitem-copied.csv';
 ----
 1802759573
 
 # Copy to parquet with a couple partitions
 statement ok
 COPY lineitem
-TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
+TO 'az://{AZ_TEMP_DIR}/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_linestatus),
 	OVERWRITE_OR_IGNORE true
@@ -61,7 +61,7 @@ TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
 query II
 SELECT sum(l_orderkey), count(DISTINCT l_linestatus)
 FROM read_parquet(
-	'az://${AZ_TEMP_DIR}/lineitem-partitioned/*/*.parquet', 
+	'az://{AZ_TEMP_DIR}/lineitem-partitioned/*/*.parquet', 
 	HIVE_PARTITIONING = true
 )
 ----
@@ -70,7 +70,7 @@ FROM read_parquet(
 # Confirm failure to overwrite when disabled
 statement error
 COPY lineitem
-TO 'az://${AZ_TEMP_DIR}/lineitem-partitioned' (
+TO 'az://{AZ_TEMP_DIR}/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_linestatus),
 	OVERWRITE false
@@ -81,11 +81,11 @@ is not empty
 # Confirm compressed write (see https://github.com/duckdb/duckdb-azure/issues/157)
 # Issue is in duckdb CompressedFile::Close but we verify here.
 statement ok
-COPY (SELECT 1 AS test) TO 'az://${AZ_TEMP_DIR}/compressed-1.csv.gz'; -- (COMPRESSION gzip);
+COPY (SELECT 1 AS test) TO 'az://{AZ_TEMP_DIR}/compressed-1.csv.gz'; -- (COMPRESSION gzip);
 
 # Confirm compression worked
 query I
-FROM 'az://${AZ_TEMP_DIR}/compressed-1.csv.gz';
+FROM 'az://{AZ_TEMP_DIR}/compressed-1.csv.gz';
 ----
 1
 

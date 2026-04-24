@@ -17,28 +17,28 @@ statement ok
 SET azure_storage_connection_string = '';
 
 statement error
-SELECT sum(l_orderkey) FROM '${prefix}testing-private/l.parquet';
+SELECT sum(l_orderkey) FROM '{prefix}testing-private/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found
 
 # Set connection string from env var
 statement ok
-SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 
 # Read a column from a parquet file
 query I
-SELECT sum(l_orderkey) FROM '${prefix}testing-private/l.parquet';
+SELECT sum(l_orderkey) FROM '{prefix}testing-private/l.parquet';
 ----
 1802759573
 
 # Read from a csv file with no header
 query I
-SELECT count(*) FROM '${prefix}testing-private/lineitem.csv';
+SELECT count(*) FROM '{prefix}testing-private/lineitem.csv';
 ----
 60175
 
 query I
-SELECT count(*) FROM '${prefix}testing-private/l.csv';
+SELECT count(*) FROM '{prefix}testing-private/l.csv';
 ----
 60175
 

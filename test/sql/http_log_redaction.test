@@ -7,7 +7,7 @@ require azure
 require-env AZURE_STORAGE_CONNECTION_STRING
 
 statement ok
-SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 
 statement ok
 CALL enable_logging('HTTP');

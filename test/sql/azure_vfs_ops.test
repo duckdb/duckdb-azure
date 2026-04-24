@@ -13,7 +13,7 @@ require-env AZURE_STORAGE_CONNECTION_STRING
 
 # Set connection string from env var
 statement ok
-SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 
 # NOTE: previous output, only on DFS since the container check comes from within FileExists calls:
 # D INSTALL 'abfss://foo/bar/go.duckdb_extension';
