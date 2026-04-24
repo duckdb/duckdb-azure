@@ -355,11 +355,7 @@ bool AzureBlobStorageFileSystem::DirectoryExists(const string &dirname, optional
 
 bool AzureBlobStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
 	auto handle = OpenFile(filename, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
-	if (handle != nullptr) {
-		auto &sfh = handle->Cast<AzureBlobStorageFileHandle>();
-		return sfh.length >= 0; // aka return true; -- avoid optimizers and shenanigans -- deref handle to be sure
-	}
-	return false;
+	return handle && handle->Cast<AzureBlobStorageFileHandle>().GetType() == FileType::FILE_TYPE_REGULAR;
 }
 
 void AzureBlobStorageFileSystem::RemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
