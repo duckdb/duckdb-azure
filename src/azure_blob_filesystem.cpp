@@ -199,7 +199,12 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 				OpenFileInfo info(result_full_url);
 				info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 				auto &options = info.extended_info->options;
-				options.emplace("type", Value("file"));
+				// Flat Blob listing on HNS accounts can surface directories as zero-length Blob entries.
+				// Only stamp a file type when the item is clearly a non-empty file so we can seed the cache
+				// without misclassifying folders.
+				if (key.BlobSize > 0) {
+					options.emplace("type", Value("file"));
+				}
 				options.emplace("file_size", Value::BIGINT(key.BlobSize));
 				options.emplace("last_modified", Value::TIMESTAMP(ToTimestamp(key.Details.LastModified)));
 				result.push_back(info);
