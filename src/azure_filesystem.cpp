@@ -24,39 +24,150 @@ void AzureContextState::QueryEnd() {
 	is_valid = false;
 }
 
+static string GetFileType(const Value &value) {
+	auto type = value.ToString();
+	if (!type.empty() && type.front() == '\'' && type.back() == '\'' && type.size() >= 2) {
+		type = type.substr(1, type.size() - 2);
+	}
+	return type;
+}
+
 AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-                                 FileType file_type, const AzureReadOptions &read_options)
+                                 FileType file_type, const AzureReadOptions &read_options,
+                                 optional_ptr<AzureMetadataCache> metadata_cache_p)
     : FileHandle(fs, info.path, flags), flags(flags),
       // File info
       is_remote_loaded(false), file_type(file_type), length(0), last_modified(0),
       // Read info
       buffer_available(0), buffer_idx(0), file_offset(0), buffer_start(0), buffer_end(0),
       // Options
-      read_options(read_options) {
+      read_options(read_options), metadata_cache(metadata_cache_p) {
 	if (!flags.RequireParallelAccess() && !flags.DirectIO()) {
 		read_buffer = duckdb::unique_ptr<data_t[]>(new data_t[read_options.buffer_size]);
 	}
 
 	// Set metadata of file when available, it avoids to invoke to the storage to get them.
+	bool has_file_type = file_type != FileType::FILE_TYPE_INVALID;
+	bool has_length = false;
+	bool has_last_modified = false;
 	if (info.extended_info) {
+		auto type_entry = info.extended_info->options.find("type");
+		if (type_entry != info.extended_info->options.end()) {
+			auto type = GetFileType(type_entry->second);
+			if (type == "directory") {
+				file_type = FileType::FILE_TYPE_DIR;
+				has_file_type = true;
+			} else if (type == "file") {
+				file_type = FileType::FILE_TYPE_REGULAR;
+				has_file_type = true;
+			}
+		}
 		auto entry1 = info.extended_info->options.find("file_size");
 		if (entry1 != info.extended_info->options.end()) {
 			length = entry1->second.GetValue<uint64_t>();
+			has_length = true;
 		}
 		auto entry2 = info.extended_info->options.find("last_modified");
 		if (entry2 != info.extended_info->options.end()) {
 			last_modified = entry2->second.GetValue<timestamp_t>();
+			has_last_modified = true;
 		}
 	}
+	if (has_file_type && has_last_modified && (file_type == FileType::FILE_TYPE_DIR || has_length)) {
+		SetFileInfo(file_type, length, last_modified);
+	}
+}
+
+void AzureFileHandle::SetFileInfo(FileType file_type_p, idx_t length_p, timestamp_t last_modified_p) {
+	is_remote_loaded = true;
+	file_type = file_type_p;
+	length = file_type_p == FileType::FILE_TYPE_DIR ? 0 : length_p;
+	last_modified = last_modified_p;
+	file_offset = 0;
 }
 
 bool AzureFileHandle::PostConstruct() {
 	return static_cast<AzureStorageFileSystem &>(file_system).LoadFileInfo(*this);
 }
 
+static bool CanUseMetadataCache(const AzureFileHandle &handle) {
+	return handle.metadata_cache && !handle.flags.OpenForWriting() && !handle.flags.OpenForAppending() &&
+	       !handle.flags.ExclusiveCreate();
+}
+
+static AzureFileInfo GetCacheEntry(const AzureFileHandle &handle) {
+	AzureFileInfo info;
+	info.file_type = handle.file_type;
+	info.length = handle.length;
+	info.last_modified = handle.last_modified;
+	return info;
+}
+
+bool AzureStorageFileSystem::ParseAzureMetadataCacheEnabled(optional_ptr<FileOpener> opener) {
+	Value metadata_cache_val;
+	if (FileOpener::TryGetCurrentSetting(opener, "enable_http_metadata_cache", metadata_cache_val) &&
+	    !metadata_cache_val.IsNull()) {
+		return metadata_cache_val.GetValue<bool>();
+	}
+	return false;
+}
+
+optional_ptr<AzureMetadataCache> AzureStorageFileSystem::GetGlobalMetadataCache() {
+	lock_guard<mutex> lock(global_cache_lock);
+	if (!global_metadata_cache) {
+		global_metadata_cache = make_uniq<AzureMetadataCache>(false);
+	}
+	return global_metadata_cache.get();
+}
+
+optional_ptr<AzureMetadataCache> AzureStorageFileSystem::GetMetadataCache(optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	auto client_context = FileOpener::TryGetClientContext(opener);
+	if (!db) {
+		return nullptr;
+	}
+	if (ParseAzureMetadataCacheEnabled(opener)) {
+		return GetGlobalMetadataCache();
+	}
+	if (client_context) {
+		return client_context->registered_state->GetOrCreate<AzureMetadataCache>("azure_metadata_cache", true).get();
+	}
+	return nullptr;
+}
+
+void AzureStorageFileSystem::InvalidateMetadata(optional_ptr<FileOpener> opener, const string &path) {
+	auto metadata_cache = GetMetadataCache(opener);
+	if (metadata_cache) {
+		metadata_cache->Erase(path);
+	}
+}
+
 bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 	try {
+		if (handle.IsRemoteLoaded()) {
+			if (CanUseMetadataCache(handle)) {
+				handle.metadata_cache->Insert(handle.path, GetCacheEntry(handle));
+			}
+			if (handle.flags.ReturnNullIfExists()) {
+				return false;
+			}
+			return true;
+		}
+		if (CanUseMetadataCache(handle)) {
+			AzureFileInfo cached_info;
+			if (handle.metadata_cache->Find(handle.path, cached_info)) {
+				handle.SetFileInfo(cached_info.file_type, cached_info.length, cached_info.last_modified);
+				if (handle.flags.ReturnNullIfExists()) {
+					return false;
+				}
+				return true;
+			}
+		}
+
 		LoadRemoteFileInfo(handle);
+		if (CanUseMetadataCache(handle)) {
+			handle.metadata_cache->Insert(handle.path, GetCacheEntry(handle));
+		}
 		if (handle.flags.ReturnNullIfExists()) {
 			return false;
 		}
