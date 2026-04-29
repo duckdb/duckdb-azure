@@ -20,7 +20,7 @@ statement ok
 CREATE OR REPLACE SECRET abfss_authn (
 	TYPE AZURE,
 	PROVIDER CREDENTIAL_CHAIN,
-	ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}',
+	ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}',
 	SCOPE 'abfss://'
 );
 
@@ -28,7 +28,7 @@ statement ok
 CREATE OR REPLACE SECRET az_authn (
 	TYPE AZURE,
 	PROVIDER CREDENTIAL_CHAIN,
-	ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}',
+	ACCOUNT_NAME '{AZ_STORAGE_ACCOUNT}',
 	SCOPE 'az://'
 );
 
@@ -36,12 +36,12 @@ foreach proto abfss az
 
 ## Basic write & read
 query I
-COPY (SELECT id: 42) TO '${proto}://duckdblabs-write-testing/extension/azure/write-id-42.csv';
+COPY (SELECT id: 42) TO '{proto}://duckdblabs-write-testing/extension/azure/write-id-42.csv';
 ----
 1
 
 query I
-SELECT id FROM '${proto}://duckdblabs-write-testing/extension/azure/write-id-42.csv';
+SELECT id FROM '{proto}://duckdblabs-write-testing/extension/azure/write-id-42.csv';
 ----
 42
 
@@ -58,18 +58,18 @@ SELECT sum(l_orderkey) FROM lineitem;
 # Copy to CSV
 statement ok
 COPY lineitem
-TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-copied.csv';
+TO '{proto}://duckdblabs-write-testing/extension/azure/lineitem-copied.csv';
 
 # ... and confirm result from copy
 query I
-SELECT sum(l_orderkey) FROM '${proto}://duckdblabs-write-testing/extension/azure/lineitem-copied.csv';
+SELECT sum(l_orderkey) FROM '{proto}://duckdblabs-write-testing/extension/azure/lineitem-copied.csv';
 ----
 1802759573
 
 # Copy to parquet with a couple partitions
 statement ok
 COPY lineitem
-TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
+TO '{proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_linestatus),
 	OVERWRITE_OR_IGNORE true
@@ -79,7 +79,7 @@ TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
 query II
 SELECT sum(l_orderkey), count(DISTINCT l_linestatus)
 FROM read_parquet(
-	'${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned/*/*.parquet', 
+	'{proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned/*/*.parquet', 
 	HIVE_PARTITIONING = true
 )
 ----
@@ -88,7 +88,7 @@ FROM read_parquet(
 # Confirm failure to overwrite when disabled
 statement error
 COPY lineitem
-TO '${proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
+TO '{proto}://duckdblabs-write-testing/extension/azure/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_linestatus),
 	OVERWRITE false

@@ -20,7 +20,7 @@ statement ok
 CREATE OR REPLACE SECRET abfss_authn (
 	TYPE AZURE,
 	PROVIDER CREDENTIAL_CHAIN,
-	ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}',
+	ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}',
 	SCOPE 'abfss://'
 );
 
@@ -28,7 +28,7 @@ statement ok
 CREATE OR REPLACE SECRET az_authn (
 	TYPE AZURE,
 	PROVIDER CREDENTIAL_CHAIN,
-	ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}',
+	ACCOUNT_NAME '{AZ_STORAGE_ACCOUNT}',
 	SCOPE 'az://'
 );
 
@@ -37,10 +37,10 @@ concurrentloop i 0 100
 
 statement ok
 COPY (
-	SELECT id: ('${i}'::INT * 100) + generate_series
+	SELECT id: ('{i}'::INT * 100) + generate_series
 	FROM generate_series(0, 99)
 )
-TO 'az://duckdblabs-write-testing/extension/azure/many/write-concurrent-${i}.csv';
+TO 'az://duckdblabs-write-testing/extension/azure/many/write-concurrent-{i}.csv';
 
 endloop
 
@@ -56,10 +56,10 @@ concurrentloop i 0 100
 
 statement ok
 COPY (
-	SELECT id: ('${i}'::INT * 100) + generate_series
+	SELECT id: ('{i}'::INT * 100) + generate_series
 	FROM generate_series(0, 99)
 )
-TO 'abfss://duckdblabs-write-testing/extension/azure/many/write-concurrent-${i}.csv';
+TO 'abfss://duckdblabs-write-testing/extension/azure/many/write-concurrent-{i}.csv';
 
 endloop
 
@@ -79,8 +79,8 @@ foreach j 0 1 2 3 4 5 6 7 8 9
 foreach k 0 1 2 3 4 5 6 7 8 9
 
 statement ok
-COPY (SELECT id: '${i}${j}${k}'::INT) 
-TO '${proto}://duckdblabs-write-testing/extension/azure/many/write-sequential-${i}${j}${k}.csv';
+COPY (SELECT id: '{i}{j}{k}'::INT) 
+TO '{proto}://duckdblabs-write-testing/extension/azure/many/write-sequential-{i}{j}{k}.csv';
 
 endloop
 
@@ -90,7 +90,7 @@ endloop
 
 # Read it back as a sum: n*(n+1) / 2
 query I 
-SELECT sum(id) FROM '${proto}://duckdblabs-write-testing/extension/azure/many/write-sequential-*.csv';
+SELECT sum(id) FROM '{proto}://duckdblabs-write-testing/extension/azure/many/write-sequential-*.csv';
 ----
 499500
 
@@ -108,18 +108,18 @@ SELECT sum(l_orderkey) FROM lineitem;
 # Now the big copy, csv file
 statement ok
 COPY (FROM lineitem CROSS JOIN generate_series(1, 10))
-TO '${proto}://duckdblabs-write-testing/extension/azure/big/lineitem.csv';
+TO '{proto}://duckdblabs-write-testing/extension/azure/big/lineitem.csv';
 
 # and confirm result from copy
 query I
-SELECT sum(l_orderkey) FROM '${proto}://duckdblabs-write-testing/extension/azure/big/lineitem.csv';
+SELECT sum(l_orderkey) FROM '{proto}://duckdblabs-write-testing/extension/azure/big/lineitem.csv';
 ----
 18027595730
 
 # Finale: Same but different -- csv -> parquet, and hive partitioned
 statement ok
 COPY (FROM lineitem CROSS JOIN generate_series(1, 10))
-TO '${proto}://duckdblabs-write-testing/extension/azure/big/lineitem-partitioned' (
+TO '{proto}://duckdblabs-write-testing/extension/azure/big/lineitem-partitioned' (
 	FORMAT 'parquet',
 	PARTITION_BY (l_returnflag, l_linestatus),
 	OVERWRITE_OR_IGNORE true
@@ -129,7 +129,7 @@ TO '${proto}://duckdblabs-write-testing/extension/azure/big/lineitem-partitioned
 query I
 SELECT sum(l_orderkey) 
 FROM read_parquet(
-	'${proto}://duckdblabs-write-testing/extension/azure/big/lineitem-partitioned/*/*/*.parquet', 
+	'{proto}://duckdblabs-write-testing/extension/azure/big/lineitem-partitioned/*/*/*.parquet', 
 	HIVE_PARTITIONING = true
 )
 ----
