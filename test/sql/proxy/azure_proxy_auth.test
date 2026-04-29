@@ -13,7 +13,7 @@ require-env HTTP_PROXY_RUNNING
 foreach prefix azure:// az://
 
 statement ok
-SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 
 statement ok
 SET azure_http_proxy = 'http://localhost:3129';
@@ -25,7 +25,7 @@ statement ok
 SET azure_proxy_password = 'doe';
 
 query I
-SELECT count(*) FROM '${prefix}testing-private/l.csv';
+SELECT count(*) FROM '{prefix}testing-private/l.csv';
 ----
 60175
 

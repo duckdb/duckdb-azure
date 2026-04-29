@@ -18,7 +18,7 @@ require-env AZ_DATA_DIR
 
 
 statement error
-SELECT count(*) FROM 'azure://${AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'azure://{AZ_DATA_DIR}/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found!
 
@@ -28,24 +28,24 @@ CREATE SECRET s1 (
     TYPE AZURE,
     PROVIDER CREDENTIAL_CHAIN,
     CHAIN 'env',
-    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '{AZ_STORAGE_ACCOUNT}'
 )
 
 query I
-SELECT count(*) FROM 'azure://${AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'azure://{AZ_DATA_DIR}/l.parquet';
 ----
 60175
 
 query I
-FROM glob('az://${AZ_DATA_DIR}/*.parquet');
+FROM glob('az://{AZ_DATA_DIR}/*.parquet');
 ----
-az://${AZ_DATA_DIR}/l.parquet
+az://{AZ_DATA_DIR}/l.parquet
 
 statement ok
 DROP SECRET s1;
 
 statement error
-SELECT count(*) FROM 'azure://${AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'azure://{AZ_DATA_DIR}/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found!
 
@@ -54,15 +54,15 @@ statement ok
 CREATE SECRET s1 (
     TYPE AZURE,
     PROVIDER CREDENTIAL_CHAIN,
-    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '{AZ_STORAGE_ACCOUNT}'
 )
 
 query I
-SELECT count(*) FROM 'azure://${AZ_DATA_DIR}/l.parquet';
+SELECT count(*) FROM 'azure://{AZ_DATA_DIR}/l.parquet';
 ----
 60175
 
 query I
-FROM glob('az://${AZ_DATA_DIR}/*.parquet');
+FROM glob('az://{AZ_DATA_DIR}/*.parquet');
 ----
-az://${AZ_DATA_DIR}/l.parquet
+az://{AZ_DATA_DIR}/l.parquet

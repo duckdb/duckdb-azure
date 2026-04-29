@@ -31,7 +31,7 @@
 # avoiding collision with a date/time + small rand here
 # TODO: (maybe) move this into unittest, plus add cleanup that works w/ e.g. azure
 rand=$(python3 -c 'import uuid; print(str(uuid.uuid4())[10:17])')
-temp_dir_suffix="$USER/$(TZ=Z date +'%Y%m%dT%H%M%SZ')--$rand"
+temp_dir_suffix="${USER:-user}/$(TZ=Z date +'%Y%m%dT%H%M%SZ')--$rand"
 
 export ABFSS_STORAGE_ACCOUNT=duckdblabstestdata
 export ABFSS_DATA_DIR=duckdblabs-data/common/azure_data
