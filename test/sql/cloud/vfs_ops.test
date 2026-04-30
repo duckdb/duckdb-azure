@@ -15,7 +15,7 @@ statement ok
 CREATE OR REPLACE SECRET abfss_authn (
 	TYPE AZURE,
 	PROVIDER CREDENTIAL_CHAIN,
-	ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}',
+	ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}',
 	SCOPE 'abfss://'
 );
 
@@ -23,7 +23,7 @@ statement ok
 CREATE OR REPLACE SECRET az_authn (
 	TYPE AZURE,
 	PROVIDER CREDENTIAL_CHAIN,
-	ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}',
+	ACCOUNT_NAME '{AZ_STORAGE_ACCOUNT}',
 	SCOPE 'az://'
 );
 
@@ -31,19 +31,19 @@ foreach proto abfss az
 
 # This test only confirms that FileExists gets called (not whether it's correct), and it's brittle at that.
 statement error
-INSTALL '${proto}://invalid-container/dir/ext.duckdb_extension';
+INSTALL '{proto}://invalid-container/dir/ext.duckdb_extension';
 ----
 container does not exist
 
 # confirm file not exist
 statement error
-INSTALL '${proto}://duckdblabs-data/common/azure_data/non-existent.duckdb_extension';
+INSTALL '{proto}://duckdblabs-data/common/azure_data/non-existent.duckdb_extension';
 ----
 <REGEX>:.*(blob|file) does not exist.*
 
 # and confirm file exists (doesn't load, but unnecessary to the test)
 statement error
-INSTALL '${proto}://duckdblabs-data/common/azure_data/l.csv';
+INSTALL '{proto}://duckdblabs-data/common/azure_data/l.csv';
 ----
 file is not a DuckDB extension
 
