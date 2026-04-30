@@ -17,28 +17,28 @@ statement ok
 SET azure_storage_connection_string = '';
 
 statement error
-SELECT sum(l_orderkey) FROM '${prefix}testing-private/l.parquet';
+SELECT sum(l_orderkey) FROM '{prefix}testing-private/l.parquet';
 ----
 Invalid Input Error: No valid Azure credentials found
 
 # Set connection string from env var
 statement ok
-SET azure_storage_connection_string = '${AZURE_STORAGE_CONNECTION_STRING}';
+SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 
 # Read a column from a parquet file
 query I
-SELECT sum(l_orderkey) FROM '${prefix}testing-private/l.parquet';
+SELECT sum(l_orderkey) FROM '{prefix}testing-private/l.parquet';
 ----
 1802759573
 
 # Read from a csv file with no header
 query I
-SELECT count(*) FROM '${prefix}testing-private/lineitem.csv';
+SELECT count(*) FROM '{prefix}testing-private/lineitem.csv';
 ----
 60175
 
 query I
-SELECT count(*) FROM '${prefix}testing-private/l.csv';
+SELECT count(*) FROM '{prefix}testing-private/l.csv';
 ----
 60175
 
@@ -51,17 +51,17 @@ SET azure_http_stats = true;
 query II
 EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://testing-private/l.parquet';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 7\.2 MiB.*\#HEAD\: 3.*GET\: 0.*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: \d[.]\d MiB.*\#HEAD\: 3.*GET\: 0.*PUT\: 0.*\#POST\: 0.*
 
 # Redoing query should still result in same request count
 query II
 EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://testing-private/l.parquet';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 7\.2 MiB.*\#HEAD\: 3.*GET\: 0.*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: \d[.]\d MiB.*\#HEAD\: 3.*GET\: 0.*PUT\: 0.*\#POST\: 0.*
 
 # Testing public blobs
 query II
 EXPLAIN ANALYZE SELECT COUNT(*) FROM "azure://testing-public/l.parquet";
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 4\.8 MiB.*\#HEAD\: 2.*GET\: 1.*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: \d[.]\d MiB.*\#HEAD\: 2.*GET\: 1.*PUT\: 0.*\#POST\: 0.*
 

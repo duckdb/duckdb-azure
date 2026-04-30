@@ -15,11 +15,11 @@ set allow_persistent_secrets=false
 
 # Using fully qualified url
 query I nosort r1
-FROM 'az://${PUBLIC_AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-public/l.parquet';
+FROM 'az://{PUBLIC_AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-public/l.parquet';
 
 # Using a secret to set the account name, we can omit the fully qualified url
 statement ok
-CREATE SECRET s1 (TYPE AZURE, ACCOUNT_NAME '${PUBLIC_AZ_STORAGE_ACCOUNT}')
+CREATE SECRET s1 (TYPE AZURE, ACCOUNT_NAME '{PUBLIC_AZ_STORAGE_ACCOUNT}')
 
 query I nosort r1
 FROM 'az://testing-public/l.parquet';
