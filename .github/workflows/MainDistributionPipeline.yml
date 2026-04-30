@@ -41,6 +41,5 @@ jobs:
       ci_tools_version: main
       extension_name: azure
       # TODO: format_checks += ;tidy
-      format_checks: format 
+      format_checks: format
       extra_toolchains: 'python3'
-
