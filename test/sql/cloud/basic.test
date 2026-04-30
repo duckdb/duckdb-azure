@@ -24,11 +24,11 @@ statement ok
 CREATE SECRET az1 (
     TYPE AZURE,
     PROVIDER CREDENTIAL_CHAIN,
-    ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '{AZ_STORAGE_ACCOUNT}'
 )
 
 query I nosort r1
-FROM 'az://${AZ_DATA_DIR}/l.parquet';
+FROM 'az://{AZ_DATA_DIR}/l.parquet';
 
 query I nosort r1
 FROM './data/l.parquet'
@@ -39,11 +39,11 @@ statement ok
 CREATE SECRET abfss1 (
     TYPE AZURE,
     PROVIDER CREDENTIAL_CHAIN,
-    ACCOUNT_NAME '${ABFSS_STORAGE_ACCOUNT}'
+    ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}'
 )
 
 query I nosort r1
-FROM 'az://${ABFSS_DATA_DIR}/l.parquet';
+FROM 'az://{ABFSS_DATA_DIR}/l.parquet';
 
 query I nosort r1
 FROM './data/l.parquet'
