@@ -165,6 +165,7 @@ jobs:
       VCPKG_TARGET_TRIPLET: 'x64-windows'
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+      GEN: ninja
       AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
@@ -178,6 +179,9 @@ jobs:
           submodules: 'true'
 
       - uses: actions/setup-node@v4
+
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
 
       - name: Launch & populate Azure test service
         run: |
@@ -195,30 +199,28 @@ jobs:
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
 
-      - &sccache
-        name: Add sccache
-        uses: hendrikmuhs/ccache-action@main
-        with:
-          variant: sccache
-          key: ${{ github.job }}-${{ matrix.duckdb_arch }}
-          restore-keys: ${{ github.job }}-${{ matrix.duckdb_arch }}
-          verbose: 1
+      - *ccache
 
       - name: Build extension
+        shell: cmd
+        env:
+          EXT_FLAGS: -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           make release
 
       - name: Test Extension
         shell: bash
         run: |
-          scripts/env_azurite build/release/test/Release/unittest.exe --test-dir . "[sql]"
+          scripts/env_azurite build/release/test/unittest.exe --test-dir . "[sql]"
 
       - name: Run test data integrity check
+        shell: bash
         run: |
           ls build
           ls build/release
-          ./build/release/Release/duckdb.exe -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
-          DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 scripts/env_azurite build/release/test/Release/unittest.exe "*test/sql/test_data_integrity.test"
+          ./build/release/duckdb.exe -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
+          DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 scripts/env_azurite build/release/test/unittest.exe "*test/sql/test_data_integrity.test"
 
       - name: Azure test server log
         if: always()
