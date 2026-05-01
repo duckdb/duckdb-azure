@@ -1,7 +1,7 @@
 name: Azure (cloud) functional tests
 on: 
   push:
-    branches: [main]
+    branches: [main,v1.5-variegata,v1.4-andium]
   repository_dispatch:
 
 concurrency:
