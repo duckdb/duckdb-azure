@@ -757,10 +757,9 @@ static std::string FetchAzureBearerToken(const std::string &chain, const std::st
 		auto token = credential->GetToken(request_ctx, Azure::Core::Context());
 		return token.Token;
 	} catch (const std::exception &ex) {
-		throw InvalidConfigurationException(
-		    "azure_get_token failed for chain='%s': %s. "
-		    "If chain includes 'cli', ensure `az login` has been run.",
-		    chain, ex.what());
+		throw InvalidConfigurationException("azure_get_token failed for chain='%s': %s. "
+		                                    "If chain includes 'cli', ensure `az login` has been run.",
+		                                    chain, ex.what());
 	}
 }
 
