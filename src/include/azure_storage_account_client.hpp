@@ -11,6 +11,7 @@
 #include "azure_parsed_url.hpp"
 
 namespace duckdb {
+class ExtensionLoader;
 
 Azure::Storage::Blobs::BlobServiceClient ConnectToBlobStorageAccount(optional_ptr<FileOpener> opener,
                                                                      const std::string &path,
@@ -21,4 +22,6 @@ ConnectToDfsStorageAccount(optional_ptr<FileOpener> opener, const std::string &p
                            const AzureParsedUrl &azure_parsed_url);
 
 const SecretMatch LookupSecret(optional_ptr<FileOpener> opener, const std::string &path);
+
+void RegisterAzureGetTokenFunction(ExtensionLoader &loader);
 } // namespace duckdb

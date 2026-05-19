@@ -5,9 +5,13 @@
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/vector_operations/binary_executor.hpp"
+#include "duckdb/common/vector_operations/unary_executor.hpp"
+#include "duckdb/function/scalar_function.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "http_logging_policy.hpp"
@@ -739,6 +743,55 @@ ConnectToDfsStorageAccount(optional_ptr<FileOpener> opener, const std::string &p
 	auto account_url = "https://" + azure_parsed_url.storage_account_name + '.' + azure_parsed_url.endpoint;
 	auto dfs_options = ToDfsClientOptions(transport_options, opener);
 	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, dfs_options);
+}
+
+static const std::string AZURE_DEFAULT_TOKEN_SCOPE = "https://storage.azure.com/.default";
+
+static std::string FetchAzureBearerToken(const std::string &chain, const std::string &scope) {
+	Azure::Core::Http::Policies::TransportOptions transport_options;
+	auto credential = CreateChainedTokenCredential(chain, transport_options);
+
+	Azure::Core::Credentials::TokenRequestContext request_ctx;
+	request_ctx.Scopes = {scope};
+	try {
+		auto token = credential->GetToken(request_ctx, Azure::Core::Context());
+		return token.Token;
+	} catch (const std::exception &ex) {
+		throw InvalidConfigurationException(
+		    "azure_get_token failed for chain='%s': %s. "
+		    "If chain includes 'cli', ensure `az login` has been run.",
+		    chain, ex.what());
+	}
+}
+
+static void AzureGetTokenFunction0Args(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto token = FetchAzureBearerToken("default", AZURE_DEFAULT_TOKEN_SCOPE);
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::GetData<string_t>(result)[0] = StringVector::AddString(result, token);
+}
+
+static void AzureGetTokenFunction1Arg(DataChunk &args, ExpressionState &state, Vector &result) {
+	UnaryExecutor::Execute<string_t, string_t>(args.data[0], result, args.size(), [&](string_t chain_str) {
+		auto token = FetchAzureBearerToken(chain_str.GetString(), AZURE_DEFAULT_TOKEN_SCOPE);
+		return StringVector::AddString(result, token);
+	});
+}
+
+static void AzureGetTokenFunction2Args(DataChunk &args, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<string_t, string_t, string_t>(
+	    args.data[0], args.data[1], result, args.size(), [&](string_t chain_str, string_t scope_str) {
+		    auto token = FetchAzureBearerToken(chain_str.GetString(), scope_str.GetString());
+		    return StringVector::AddString(result, token);
+	    });
+}
+
+void RegisterAzureGetTokenFunction(ExtensionLoader &loader) {
+	ScalarFunctionSet set("azure_get_token");
+	set.AddFunction(ScalarFunction({}, LogicalType::VARCHAR, AzureGetTokenFunction0Args));
+	set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, AzureGetTokenFunction1Arg));
+	set.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, AzureGetTokenFunction2Args));
+	loader.RegisterFunction(set);
 }
 
 } // namespace duckdb

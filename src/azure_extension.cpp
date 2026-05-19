@@ -2,6 +2,7 @@
 #include "azure_blob_filesystem.hpp"
 #include "azure_dfs_filesystem.hpp"
 #include "azure_secret.hpp"
+#include "azure_storage_account_client.hpp"
 
 namespace duckdb {
 
@@ -14,6 +15,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Load Secret functions
 	CreateAzureSecretFunctions::Register(loader);
+
+	// Register scalar functions
+	RegisterAzureGetTokenFunction(loader);
 
 	// Load extension config
 	auto &config = DBConfig::GetConfig(instance);
