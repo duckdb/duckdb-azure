@@ -162,6 +162,13 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(parsed_url.container);
 
+	// A trailing '/' is only a directory hint, not part of the resource name. Some DFS endpoints (e.g. OneLake)
+	// reject a GetProperties on a trailing-slash path with 403 AuthenticationFailed, so strip it for the client.
+	auto file_path = parsed_url.path;
+	if (file_path.size() > 1 && file_path.back() == '/') {
+		file_path.pop_back();
+	}
+
 	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options,
 	                                                   file_system_client.GetFileClient(parsed_url.path));
 	if (!handle->PostConstruct()) {
