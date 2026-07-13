@@ -1,13 +1,11 @@
-
 name: Azurite (local) functional tests
-on: [push, pull_request,repository_dispatch]
+on: [push, pull_request, repository_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
 defaults:
   run:
     shell: bash
-
 
 env:
   VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
@@ -17,21 +15,21 @@ jobs:
     name: Azurite tests (Linux)
     runs-on: ubuntu-latest
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-linux'
+      VCPKG_TARGET_TRIPLET: x64-linux
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       GEN: ninja
-      AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
-      HTTP_PROXY_RUNNING: '1'
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      HTTP_PROXY_RUNNING: "1"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
       AZ_TEMP_DIR: writes
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          submodules: 'true'
+          submodules: true
 
       - uses: actions/setup-node@v4
 
@@ -97,21 +95,21 @@ jobs:
     name: Azurite tests (MacOS)
     runs-on: macos-latest
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-osx'
-      OSX_BUILD_ARCH: 'x86_64'
+      VCPKG_TARGET_TRIPLET: x64-osx
+      OSX_BUILD_ARCH: x86_64
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-      AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
       AZ_TEMP_DIR: writes
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          submodules: 'true'
+          submodules: true
 
       - name: Install Ninja
         run: brew install ninja
@@ -127,7 +125,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
@@ -162,21 +160,21 @@ jobs:
     name: Azurite tests (Windows)
     runs-on: windows-latest
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-windows'
+      VCPKG_TARGET_TRIPLET: x64-windows
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
       GEN: ninja
-      AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
       AZ_TEMP_DIR: writes
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          submodules: 'true'
+          submodules: true
 
       - uses: actions/setup-node@v4
 
@@ -192,7 +190,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
