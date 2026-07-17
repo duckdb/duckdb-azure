@@ -79,8 +79,7 @@ AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo 
 		}
 	}
 	const bool has_complete_file_info = has_length && !etag.empty();
-	if (has_file_type && has_last_modified &&
-	    (file_type == FileType::FILE_TYPE_DIR || has_complete_file_info)) {
+	if (has_file_type && has_last_modified && (file_type == FileType::FILE_TYPE_DIR || has_complete_file_info)) {
 		SetFileInfo(file_type, length, last_modified, etag);
 	}
 }
