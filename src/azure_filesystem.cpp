@@ -32,6 +32,22 @@ static string GetFileType(const Value &value) {
 	return type;
 }
 
+static string GetMetadataCacheAlias(const string &path) {
+	if (path.rfind("azure://", 0) == 0) {
+		return "az://" + path.substr(8);
+	}
+	if (path.rfind("az://", 0) == 0) {
+		return "azure://" + path.substr(5);
+	}
+	if (path.rfind("abfss://", 0) == 0) {
+		return "abfs://" + path.substr(8);
+	}
+	if (path.rfind("abfs://", 0) == 0) {
+		return "abfss://" + path.substr(7);
+	}
+	return string();
+}
+
 AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
                                  FileType file_type, const AzureOptions &options,
                                  optional_ptr<AzureMetadataCache> metadata_cache_p)
@@ -148,6 +164,12 @@ void AzureStorageFileSystem::InvalidateMetadata(optional_ptr<FileOpener> opener,
 	auto metadata_cache = GetMetadataCache(opener);
 	if (metadata_cache) {
 		metadata_cache->Erase(path);
+		// Scheme aliases can address the same remote object while retaining distinct secret scopes.
+		// Invalidate both spellings without merging their cache entries.
+		auto alias = GetMetadataCacheAlias(path);
+		if (!alias.empty()) {
+			metadata_cache->Erase(alias);
+		}
 	}
 }
 
