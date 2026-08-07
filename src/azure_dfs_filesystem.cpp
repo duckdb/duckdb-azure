@@ -176,6 +176,7 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 
 	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options,
 	                                                   file_system_client.GetFileClient(file_path));
+	handle->connected_anonymously = storage_context->connected_anonymously;
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -394,7 +395,11 @@ shared_ptr<AzureContextState> AzureDfsStorageFileSystem::CreateStorageContext(op
                                                                               const AzureParsedUrl &parsed_url) {
 	auto azure_options = ParseAzureOptions(opener);
 
-	return make_shared_ptr<AzureDfsContextState>(ConnectToDfsStorageAccount(opener, path, parsed_url), azure_options);
+	bool connected_anonymously = false;
+	auto state = make_shared_ptr<AzureDfsContextState>(
+	    ConnectToDfsStorageAccount(opener, path, parsed_url, &connected_anonymously), azure_options);
+	state->connected_anonymously = connected_anonymously;
+	return state;
 }
 
 int64_t AzureDfsStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes) {
