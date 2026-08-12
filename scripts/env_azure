@@ -33,13 +33,21 @@
 rand=$(python3 -c 'import uuid; print(str(uuid.uuid4())[10:17])')
 temp_dir_suffix="${USER:-user}/$(TZ=Z date +'%Y%m%dT%H%M%SZ')--$rand"
 
+# Which extension's test paths to address; consumers set this (see delta's scripts/env_delta).
+# Reject anything unusable rather than silently addressing a container root.
+: "${DUCKDB_TEST_EXTENSION:=azure}"
+[[ "$DUCKDB_TEST_EXTENSION" =~ ^[a-z0-9_]+$ ]] || {
+	echo "DUCKDB_TEST_EXTENSION must be a bare extension name, got '$DUCKDB_TEST_EXTENSION'" >&2
+	exit 1
+}
+
 export ABFSS_STORAGE_ACCOUNT=duckdblabstestdata
-export ABFSS_DATA_DIR=duckdblabs-data/common/azure_data
-export ABFSS_TEMP_DIR="duckdblabs-write-testing/extension/azure/$temp_dir_suffix"
+export ABFSS_DATA_DIR="duckdblabs-data/extension/$DUCKDB_TEST_EXTENSION"
+export ABFSS_TEMP_DIR="duckdblabs-write-testing/extension/$DUCKDB_TEST_EXTENSION/$temp_dir_suffix"
 
 export AZ_STORAGE_ACCOUNT=duckdblabstestdatablob
-export AZ_DATA_DIR=duckdblabs-data/common/azure_data
-export AZ_TEMP_DIR="duckdblabs-write-testing/extension/azure/$temp_dir_suffix"
+export AZ_DATA_DIR="duckdblabs-data/extension/$DUCKDB_TEST_EXTENSION"
+export AZ_TEMP_DIR="duckdblabs-write-testing/extension/$DUCKDB_TEST_EXTENSION/$temp_dir_suffix"
 
 export AZURE_AUTH_ENV=1
 export AZURE_PROVIDER=cloud
@@ -47,16 +55,16 @@ export AZURE_PROVIDER=cloud
 [[ -n "$1" && "$1" = "--abfss" ]] && {
 	export AZURE_PROTOCOL=abfss
 	export AZURE_STORAGE_ACCOUNT="$ABFSS_STORAGE_ACCOUNT"
-	export DATA_DIR="$ABFSS_DATADIR"
-	export TEMP_DIR="$ABFSS_TEMPDIR"
+	export DATA_DIR="$ABFSS_DATA_DIR"
+	export TEMP_DIR="$ABFSS_TEMP_DIR"
 	shift
 }
 
 [[ -n "$1" && "$1" = "--az" ]] && {
 	export AZURE_PROTOCOL=az
 	export AZURE_STORAGE_ACCOUNT="$AZ_STORAGE_ACCOUNT"
-	export DATA_DIR="$AZ_DATADIR"
-	export TEMP_DIR="$AZ_TEMPDIR"
+	export DATA_DIR="$AZ_DATA_DIR"
+	export TEMP_DIR="$AZ_TEMP_DIR"
 	shift
 }
 
