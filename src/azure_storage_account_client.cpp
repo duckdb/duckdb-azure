@@ -38,7 +38,7 @@ namespace duckdb {
 const static std::string DEFAULT_BLOB_ENDPOINT = "blob.core.windows.net";
 const static std::string DEFAULT_DFS_ENDPOINT = "dfs.core.windows.net";
 
-static std::string TryGetCurrentSetting(optional_ptr<FileOpener> opener, const std::string &name) {
+static std::string TryGetCurrentSetting(optional_ptr<FileOpener> opener, const Identifier &name) {
 	Value val;
 	if (FileOpener::TryGetCurrentSetting(opener, name, val)) {
 		return val.ToString();
