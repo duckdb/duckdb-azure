@@ -1,0 +1,31 @@
+# pyproject.toml — a starter written ONCE by `ducktest configure`; after this it's YOURS (configure will
+# never overwrite it). It declares this extension's TEST environment so `uv run pytest`, run from this
+# dir, resolves everything pytest imports from a single venv. The pytest *config* lives next door in
+# pytest.ini (also written by configure); deps live here.
+#
+# This repo is an EXTENSION, not a Python package, so `[tool.uv] package = false` stops uv from trying to
+# build/install it — you still get `uv run pytest`. Your own test-support Python (generators, provisioners)
+# imports via the driver's `duckdb_pythonpath`, not from here (see the driver README, "Python layout").
+
+[project]
+name = "duckdb-azure-tests" # any name; this project is never published
+version = "0"
+requires-python = ">=3.12"
+
+[dependency-groups]
+# Everything pytest imports, in ONE place — uv installs this `dev` group by default under `uv run`.
+dev = [
+  "duckdb-pytest-driver[xdist]", # the driver; its [xdist] extra brings pytest + pytest-xdist
+]
+
+[tool.uv]
+package = false
+
+# TODO: update to tagged release when ready
+[tool.uv.sources]
+duckdb-pytest-driver = { git = "https://github.com/benfleis/duckdb-pytest-driver", branch = "dev/v0.2" }
+
+# Conform to duckdb's python black settings (so `ruff format` matches CI).
+[tool.ruff]
+line-length = 120
+format.quote-style = "preserve"
