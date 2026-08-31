@@ -12,13 +12,16 @@
 
 namespace duckdb {
 
+// When provided, `connected_anonymously` is set to true if no secret matched the path and the returned
+// client sends unauthenticated requests (public storage account access).
 Azure::Storage::Blobs::BlobServiceClient ConnectToBlobStorageAccount(optional_ptr<FileOpener> opener,
                                                                      const std::string &path,
-                                                                     const AzureParsedUrl &azure_parsed_url);
+                                                                     const AzureParsedUrl &azure_parsed_url,
+                                                                     bool *connected_anonymously = nullptr);
 
 Azure::Storage::Files::DataLake::DataLakeServiceClient
 ConnectToDfsStorageAccount(optional_ptr<FileOpener> opener, const std::string &path,
-                           const AzureParsedUrl &azure_parsed_url);
+                           const AzureParsedUrl &azure_parsed_url, bool *connected_anonymously = nullptr);
 
 const SecretMatch LookupSecret(optional_ptr<FileOpener> opener, const std::string &path);
 } // namespace duckdb
