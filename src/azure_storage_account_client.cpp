@@ -356,6 +356,14 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(const s
                                                                          const std::string &proxy_password) {
 	Azure::Core::Http::Policies::TransportOptions transport_options;
 	if (transport_option_type == "default") {
+#if !defined(_WIN32) && !defined(__APPLE__)
+		// On Linux, the transport the Azure SDK builds internally for "default" is curl-based but,
+		// unlike CreateCurlTransport() below, does not search common CA bundle locations. That leaves
+		// it relying on libcurl's compiled-in default path, which is RedHat-family only and missing on
+		// Debian/Ubuntu, causing "Problem with the SSL CA cert" for every request.
+		// https://github.com/duckdb/duckdb-azure/issues/185
+		transport_options.Transport = CreateCurlTransport(proxy, proxy_username, proxy_password);
+#else
 		if (!proxy.empty()) {
 			transport_options.HttpProxy = proxy;
 		}
@@ -367,6 +375,7 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(const s
 		if (!proxy_password.empty()) {
 			transport_options.ProxyPassword = proxy_password;
 		}
+#endif
 	} else if (transport_option_type == "curl") {
 		transport_options.Transport = CreateCurlTransport(proxy, proxy_username, proxy_password);
 	} else {
