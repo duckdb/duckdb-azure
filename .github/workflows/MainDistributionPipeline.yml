@@ -19,6 +19,7 @@ jobs:
       extension_name: &ext_name azure
       duckdb_version: &duckdb_ref main
       ci_tools_version: &ci_tools_ref main
+      # Temporary override; remove when extension-ci-tools updates its default.
       vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
       exclude_archs: &exclude_archs wasm_mvp;wasm_eh;wasm_threads;windows_amd64_rtools;windows_amd64_mingw
 
