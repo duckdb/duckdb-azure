@@ -1,0 +1,218 @@
+# DRAFT — ducktest-driver-based provision/test suite for the azure extension.
+#
+# Modeled on the driver's proven workflow (benfleis/duckdb-pytest-driver .github/workflows/test.yml):
+# a thin wrapper that runs the same commands a dev runs. Two tiers, mirroring the suites declared in
+# test/conftest.py (register_suite):
+#   * azurite — suite `local` (default=True). The driver boots an azurite container (AZURITE_SERVICE),
+#               rclone-seeds `data/` into the containers, and adopts the azure connection env, so the
+#               bare `.test` bodies run with no manual env script. A bare `uv run pytest` selects it.
+#               Needs docker (preinstalled on ubuntu-latest) + rclone.
+#   * cloud   — suite `cloud` (default=False, marker `cloud`). Real Azure (AZURE_* / ABFSS). DEFERRED:
+#               credential wiring is future work (test/conftest.py) and the bodies self-gate on
+#               `require-env`. Stubbed here, creds-gated, NOT yet enabled.
+#   (A third `proxy` suite exists but is deferred — needs a squid service; not wired here.)
+#
+# NOTE on the docker gate: the driver's `--run-docker`/`-m docker` convention is the driver's SELF-test
+# norm. This consumer uses the driver SUITE system instead — the docker tier IS the default suite (no
+# flag), and the cloud tier is opted into with `-m cloud`. (Never `-m 'not docker'`.)
+#
+# !!! BLOCKING PREREQUISITE (build-integration): this repo has NO pyproject.toml yet, so `uv run pytest`
+# !!! cannot resolve the driver. Before this workflow can go green, add a pyproject.toml mirroring the UC
+# !!! extension's (name = azure tests; [dependency-groups] dev = ["duckdb-pytest-driver[xdist]", ...];
+# !!! [tool.uv] package = false; [tool.uv.sources] duckdb-pytest-driver = { path = "../driver" }). The
+# !!! side-by-side checkout below is already laid out so `../driver` resolves once that file exists.
+
+name: Ducktest functional tests
+
+on:
+  push:
+    branches: [convert-to-ducktest, main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      driver_ref:
+        description: "git ref of benfleis/duckdb-pytest-driver to test against"
+        required: false
+        default: redesign
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DRIVER_REPO: benfleis/duckdb-pytest-driver
+  DRIVER_REF: ${{ github.event.inputs.driver_ref || 'redesign' }}
+  VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Presence-gate for the (deferred) cloud tier. secrets are unreadable in a job-level
+  # `if:`, so a guard job reads them in a step expression and publishes a boolean.
+  # ---------------------------------------------------------------------------
+  guard-cloud:
+    name: Check Azure credentials present
+    runs-on: ubuntu-latest
+    outputs:
+      has_creds: ${{ steps.check.outputs.has }}
+    steps:
+      - id: check
+        # `!= ''` collapses the secret to a boolean before it is printed — no secret is emitted.
+        run: echo "has=${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Azurite tier: the default `local` suite. Build the extension, then let the driver
+  # boot azurite + rclone-seed + run the .test bodies with provisioning.
+  # ---------------------------------------------------------------------------
+  azurite:
+    name: Azurite (ducktest, docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # guard rail: a wedged container/seed fails here, not at the 6h job default
+    defaults:
+      run:
+        working-directory: main
+    env:
+      # --- build env, lifted from LocalTesting.yml azurite-tests-linux (the proven recipe) ----------
+      VCPKG_TARGET_TRIPLET: x64-linux
+      GEN: ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      # ducktest: point the driver at the release build.
+      BUILD_DIR: build/release
+
+    steps:
+      # --- side-by-side checkout so `../driver` resolves from main/pyproject.toml -------------------
+      - name: Checkout azure (consumer) at main/
+        uses: actions/checkout@v4
+        with:
+          path: main
+          fetch-depth: 0
+          submodules: true
+
+      - name: Checkout the ducktest driver at driver/ (sibling of main/)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DRIVER_REPO }}
+          ref: ${{ env.DRIVER_REF }}
+          path: driver
+
+      # --- build (lifted from LocalTesting.yml azurite-tests-linux; paths rebased under main/) ------
+      - name: Install Ninja
+        run: sudo apt-get update -y -q && sudo apt-get install -y -q ninja-build
+
+      - name: Add ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          variant: ccache
+          key: ${{ github.job }}
+          restore-keys: ${{ github.job }}
+          verbose: 1
+          evict-old-files: 7d
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Build extension
+        run: make release
+
+      # --- ducktest: uv + rclone + the suite run ----------------------------------------------------
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      # The azurite suite seeds via rclone (test/conftest.py `_populate`). apt's rclone is often too old
+      # for the azureblob emulator, so install the current release (same as the driver's docker job).
+      - name: Install rclone (current release)
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Azurite suite (default `local`; boots azurite + rclone-seeds)
+        # -n0 -s: serial + unbuffered so container/seed output streams live (xdist buffers it).
+        # Bare selection == the default suite; no -m needed. uv resolves the driver from ../driver.
+        # NB: requires this repo's pyproject.toml (see BLOCKING PREREQUISITE at the top of this file).
+        run: uv run pytest -n0 -s
+
+  # ---------------------------------------------------------------------------
+  # Cloud tier (DEFERRED / not-yet-enabled): the non-default `cloud` suite. Real Azure
+  # creds via 1Password, mirroring CloudTesting.yml. Creds-gated by the guard job. The
+  # actual run is intentionally left disabled until the credential wiring lands
+  # (test/conftest.py notes it as future work); this stub keeps the shape reviewable.
+  # ---------------------------------------------------------------------------
+  cloud:
+    name: Azure cloud (ducktest, DEFERRED)
+    needs: guard-cloud
+    if: needs.guard-cloud.outputs.has_creds == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: main
+    env:
+      VCPKG_TARGET_TRIPLET: x64-linux
+      GEN: ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      DUCKDB_PLATFORM: linux_amd64
+      BUILD_DIR: build/release
+
+    steps:
+      - name: Checkout azure (consumer) at main/
+        uses: actions/checkout@v4
+        with:
+          path: main
+          fetch-depth: 0
+          submodules: true
+
+      - name: Checkout the ducktest driver at driver/ (sibling of main/)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DRIVER_REPO }}
+          ref: ${{ env.DRIVER_REF }}
+          path: driver
+
+      - name: Install Ninja
+        run: sudo apt-get update -y -q && sudo apt-get install -y -q ninja-build
+
+      - name: Add ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          variant: ccache
+          key: ${{ github.job }}
+          restore-keys: ${{ github.job }}
+          verbose: 1
+          evict-old-files: 7d
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Build extension
+        run: make release
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      # Credentials: same source as CloudTesting.yml (1Password → AZURE_*). TODO(secrets): confirm
+      # OP_SERVICE_ACCOUNT_TOKEN and the op:// item paths for tenant/client/secret.
+      - name: Load Azure credentials
+        uses: 1password/load-secrets-action@v3
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://testing-rw/azure/tenant_id
+          AZURE_CLIENT_ID: op://testing-rw/azure/client_id
+          AZURE_CLIENT_SECRET: op://testing-rw/azure/client_secret
+
+      # TODO(deferred): enable the real cloud run once the driver `cloud` credential wiring lands. Until
+      # then this is a placeholder so the tier's shape is reviewable but never executes live cloud tests.
+      - name: Cloud suite (`-m cloud`) — NOT YET ENABLED
+        run: |
+          echo "Azure cloud tier is deferred — credential wiring is future work (test/conftest.py)."
+          echo "When enabled, this becomes: uv run pytest -m cloud -n0 -s"
