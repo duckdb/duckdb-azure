@@ -73,6 +73,7 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 					OpenFileInfo info(elt.Name);
 					info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 					auto &options = info.extended_info->options;
+					options.emplace("type", Value("file"));
 					options.emplace("file_size", Value::BIGINT(elt.FileSize));
 					options.emplace("last_modified",
 					                Value::TIMESTAMP(AzureStorageFileSystem::ToTimestamp(elt.LastModified)));
@@ -107,8 +108,10 @@ AzureDfsContextState::GetDfsFileSystemClient(const std::string &file_system_name
 //////// AzureDfsContextState ////////
 AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info,
                                                      FileOpenFlags flags, const AzureOptions &options,
+                                                     optional_ptr<AzureMetadataCache> metadata_cache,
                                                      Azure::Storage::Files::DataLake::DataLakeFileClient client)
-    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, options), file_client(std::move(client)) {
+    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, options, metadata_cache),
+      file_client(std::move(client)) {
 }
 
 void AzureDfsStorageFileHandle::StageWriteBuffer() {
@@ -165,6 +168,9 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		InvalidateMetadata(opener, info.path);
+	}
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(parsed_url.container);
 
 	// A trailing '/' is only a directory hint, not part of the resource name. Some DFS endpoints (e.g. OneLake)
@@ -174,8 +180,9 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 		file_path.pop_back();
 	}
 
-	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options,
-	                                                   file_system_client.GetFileClient(file_path));
+	auto handle =
+	    make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options, GetMetadataCache(opener),
+	                                         file_system_client.GetFileClient(file_path));
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -199,6 +206,7 @@ void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_
 	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(dir_url.container);
 	file_system_client.GetDirectoryClient(dir_url.path).Create();
+	InvalidateMetadata(opener, dirname);
 }
 
 bool AzureDfsStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
@@ -213,6 +221,7 @@ void AzureDfsStorageFileSystem::RemoveFile(const string &filename, optional_ptr<
 	auto file_client = file_system_client.GetFileClient(url.path);
 	try {
 		file_client.Delete();
+		InvalidateMetadata(opener, filename);
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureDfsStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -224,7 +233,11 @@ bool AzureDfsStorageFileSystem::TryRemoveFile(const string &filename, optional_p
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
 	auto file_client = file_system_client.GetFileClient(url.path);
-	return file_client.DeleteIfExists().Value.Deleted;
+	auto removed = file_client.DeleteIfExists().Value.Deleted;
+	if (removed) {
+		InvalidateMetadata(opener, filename);
+	}
+	return removed;
 }
 
 vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpener *opener) {
@@ -333,12 +346,8 @@ void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	// - doesn't exist, don't create
 
 	auto set_props = [&](bool is_dir, idx_t length, timestamp_t last_mod, const string &etag) {
-		afh.is_remote_loaded = true; // always set loaded
-		afh.file_type = is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR;
-		afh.length = is_dir ? 0 : length;
-		afh.last_modified = last_mod;
-		afh.etag = StripETagQuotes(etag);
-		afh.file_offset = 0; // always reset offset state
+		afh.SetFileInfo(is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR, length, last_mod,
+		                StripETagQuotes(etag));
 	};
 
 	auto create_file = [&]() {

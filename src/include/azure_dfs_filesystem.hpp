@@ -28,7 +28,8 @@ class AzureDfsStorageFileSystem;
 class AzureDfsStorageFileHandle : public AzureFileHandle {
 public:
 	AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-	                          const AzureOptions &options, Azure::Storage::Files::DataLake::DataLakeFileClient client);
+	                          const AzureOptions &options, optional_ptr<AzureMetadataCache> metadata_cache,
+	                          Azure::Storage::Files::DataLake::DataLakeFileClient client);
 	~AzureDfsStorageFileHandle() override = default;
 
 	void StageWriteBuffer();

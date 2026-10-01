@@ -8,6 +8,8 @@ require parquet
 
 require-env AZURE_STORAGE_CONNECTION_STRING
 
+require-env AZ_TEMP_DIR
+
 statement ok
 SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 
@@ -38,3 +40,35 @@ query II
 EXPLAIN ANALYZE SELECT sum(l_orderkey) FROM 'az://testing-private/l*.parquet';
 ----
 analyzed_plan	<REGEX>:.*Azure HTTP Stats.*\#HEAD\: 0.*GET.*
+
+# -----------------------------------------------------------------------------
+# Global metadata cache: URI aliases for the same Blob invalidate each other
+
+statement ok
+SET enable_http_metadata_cache = true;
+
+statement ok
+COPY (SELECT i FROM range(10) t(i))
+TO 'az://{AZ_TEMP_DIR}/metadata-cache-alias.csv' (HEADER false);
+
+# Populate the global metadata cache through the short URI alias.
+query I
+SELECT count(*)
+FROM read_csv('az://{AZ_TEMP_DIR}/metadata-cache-alias.csv', header = false, columns = {'i': 'BIGINT'});
+----
+10
+
+# Overwrite the same Blob through the long URI alias. This must invalidate the
+# metadata inserted through az:// rather than leaving the old file length cached.
+statement ok
+COPY (SELECT i FROM range(1000) t(i))
+TO 'azure://{AZ_TEMP_DIR}/metadata-cache-alias.csv' (HEADER false);
+
+query I
+SELECT count(*)
+FROM read_csv('az://{AZ_TEMP_DIR}/metadata-cache-alias.csv', header = false, columns = {'i': 'BIGINT'});
+----
+1000
+
+statement ok
+RESET enable_http_metadata_cache;
