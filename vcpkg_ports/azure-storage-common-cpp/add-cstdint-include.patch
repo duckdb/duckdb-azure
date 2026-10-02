@@ -1,0 +1,12 @@
+diff --git a/sdk/storage/azure-storage-common/inc/azure/storage/common/internal/structured_message_helper.hpp b/sdk/storage/azure-storage-common/inc/azure/storage/common/internal/structured_message_helper.hpp
+index 270750419..dae0b8929 100644
+--- a/sdk/storage/azure-storage-common/inc/azure/storage/common/internal/structured_message_helper.hpp
++++ b/sdk/storage/azure-storage-common/inc/azure/storage/common/internal/structured_message_helper.hpp
+@@ -4,6 +4,7 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <cstdint>
+ #include <functional>
+ #include <memory>
+ #include <vector>

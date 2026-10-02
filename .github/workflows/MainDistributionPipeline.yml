@@ -37,7 +37,7 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
       extension_name: *ext_name
-      duckdb_version: fc4002c6e36f1e2d17d7c5b1a604777d69238d2b
+      duckdb_version: 96063b9e39749cc0f087bb11501d7edbee527957
       ci_tools_version: *ci_tools_ref
       # TODO: format_checks += ;tidy
       format_checks: format
