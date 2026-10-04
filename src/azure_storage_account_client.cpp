@@ -29,9 +29,11 @@
 #include <azure/storage/blobs/blob_service_client.hpp>
 #include <azure/storage/files/datalake/datalake_options.hpp>
 #include <azure/storage/files/datalake/datalake_service_client.hpp>
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 #include <type_traits>
 
 namespace duckdb {
@@ -651,7 +653,8 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(optiona
 
 static Azure::Storage::Blobs::BlobServiceClient GetBlobStorageAccountClient(optional_ptr<FileOpener> opener,
                                                                             const std::string &provided_storage_account,
-                                                                            const std::string &provided_endpoint) {
+                                                                            const std::string &provided_endpoint,
+                                                                            bool *connected_anonymously) {
 	auto transport_options = GetTransportOptions(opener);
 	auto blob_options = ToBlobClientOptions(transport_options, opener);
 
@@ -691,6 +694,9 @@ static Azure::Storage::Blobs::BlobServiceClient GetBlobStorageAccountClient(opti
 	}
 
 	// Anonymous
+	if (connected_anonymously) {
+		*connected_anonymously = true;
+	}
 	return Azure::Storage::Blobs::BlobServiceClient {account_url, blob_options};
 }
 
@@ -702,26 +708,64 @@ const SecretMatch LookupSecret(optional_ptr<FileOpener> opener, const std::strin
 		return secret_manager->LookupSecret(*transaction, path, "azure");
 	}
 
+	// Some openers expose a ClientContext but no DatabaseInstance (e.g. openers coming from scan threads),
+	// in which case TryGetSecretManager returns nothing. Derive the secret manager and a system transaction
+	// from the context so (temporary) secrets are still found instead of silently connecting anonymously.
+	auto context = FileOpener::TryGetClientContext(opener);
+	if (context) {
+		auto system_transaction = CatalogTransaction::GetSystemCatalogTransaction(*context);
+		return SecretManager::Get(*context).LookupSecret(system_transaction, path, "azure");
+	}
+
 	return {};
+}
+
+static bool SecretLookupPossible(optional_ptr<FileOpener> opener) {
+	if (FileOpener::TryGetSecretManager(opener) && FileOpener::TryGetCatalogTransaction(opener)) {
+		return true;
+	}
+	return FileOpener::TryGetClientContext(opener) != nullptr;
+}
+
+// Temporary secrets can be registered concurrently with the first file opens (e.g. iceberg catalogs
+// registering vended per-table credentials at bind time while scan threads already open manifests) and
+// a just-created catalog entry only becomes visible to other transactions once it commits. Retry the
+// lookup briefly before concluding that there is no secret.
+static SecretMatch LookupSecretWithRetry(optional_ptr<FileOpener> opener, const std::string &path) {
+	auto secret_match = LookupSecret(opener, path);
+	if (secret_match.HasMatch() || !SecretLookupPossible(opener)) {
+		return secret_match;
+	}
+	static constexpr int RETRY_DELAYS_MS[] = {10, 25, 50, 100};
+	for (auto delay : RETRY_DELAYS_MS) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+		secret_match = LookupSecret(opener, path);
+		if (secret_match.HasMatch()) {
+			return secret_match;
+		}
+	}
+	return secret_match;
 }
 
 Azure::Storage::Blobs::BlobServiceClient ConnectToBlobStorageAccount(optional_ptr<FileOpener> opener,
                                                                      const std::string &path,
-                                                                     const AzureParsedUrl &azure_parsed_url) {
-	auto secret_match = LookupSecret(opener, path);
+                                                                     const AzureParsedUrl &azure_parsed_url,
+                                                                     bool *connected_anonymously) {
+	auto secret_match = LookupSecretWithRetry(opener, path);
 	if (secret_match.HasMatch()) {
 		const auto &base_secret = secret_match.GetSecret();
 		return GetBlobStorageAccountClient(opener, dynamic_cast<const KeyValueSecret &>(base_secret), azure_parsed_url);
 	}
 
 	// No secret found try to connect with variables
-	return GetBlobStorageAccountClient(opener, azure_parsed_url.storage_account_name, azure_parsed_url.endpoint);
+	return GetBlobStorageAccountClient(opener, azure_parsed_url.storage_account_name, azure_parsed_url.endpoint,
+	                                   connected_anonymously);
 }
 
 Azure::Storage::Files::DataLake::DataLakeServiceClient
 ConnectToDfsStorageAccount(optional_ptr<FileOpener> opener, const std::string &path,
-                           const AzureParsedUrl &azure_parsed_url) {
-	auto secret_match = LookupSecret(opener, path);
+                           const AzureParsedUrl &azure_parsed_url, bool *connected_anonymously) {
+	auto secret_match = LookupSecretWithRetry(opener, path);
 	if (secret_match.HasMatch()) {
 		const auto &base_secret = secret_match.GetSecret();
 		return GetDfsStorageAccountClient(opener, dynamic_cast<const KeyValueSecret &>(base_secret), azure_parsed_url);
@@ -735,6 +779,9 @@ ConnectToDfsStorageAccount(optional_ptr<FileOpener> opener, const std::string &p
 	}
 
 	// No secret but FQDN has been provided, connect to a public storage account
+	if (connected_anonymously) {
+		*connected_anonymously = true;
+	}
 	auto transport_options = GetTransportOptions(opener);
 	auto account_url = "https://" + azure_parsed_url.storage_account_name + '.' + azure_parsed_url.endpoint;
 	auto dfs_options = ToDfsClientOptions(transport_options, opener);
