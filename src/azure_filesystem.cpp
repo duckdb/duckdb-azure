@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/logging/log_manager.hpp"
@@ -111,24 +112,34 @@ AzureStorageFileSystem::AzureStorageFileSystem(shared_ptr<AzureMetadataCache> gl
 	D_ASSERT(global_metadata_cache);
 }
 
-static string GetMetadataCacheKey(const string &resolved_url) {
+uint64_t AzureMetadataCacheKeyHash::operator()(const AzureMetadataCacheKey &key) const {
+	auto hash = Hash(key.account_or_onelake.data(), key.account_or_onelake.size());
+	hash = CombineHash(Hash(hash), Hash(key.path.data(), key.path.size()));
+	hash = CombineHash(Hash(hash), Hash(key.snapshot.data(), key.snapshot.size()));
+	return CombineHash(Hash(hash), Hash(key.version.data(), key.version.size()));
+}
+
+static AzureMetadataCacheKey GetMetadataCacheKey(const string &resolved_url) {
 	Azure::Core::Url url(resolved_url);
 	auto host = StringUtil::Lower(url.GetHost());
-	const bool azure_endpoint =
+	const bool storage_endpoint =
 	    StringUtil::EndsWith(host, ".core.windows.net") || StringUtil::EndsWith(host, ".core.chinacloudapi.cn") ||
 	    StringUtil::EndsWith(host, ".core.usgovcloudapi.net") || StringUtil::EndsWith(host, ".core.cloudapi.de") ||
-	    StringUtil::EndsWith(host, ".storage.azure.net");
-	auto account_end = host.find('.');
-	if (account_end != string::npos) {
-		auto service_end = host.find('.', account_end + 1);
-		auto service = host.substr(account_end + 1, service_end - account_end - 1);
-		if (service_end != string::npos && (service == "blob" || service == "dfs")) {
-			// Blob and DFS endpoints expose the same objects in an HNS account.
-			host.erase(account_end + 1, service_end - account_end);
+	    StringUtil::EndsWith(host, ".storage.azure.net") || StringUtil::EndsWith(host, ".dfs.fabric.microsoft.com") ||
+	    StringUtil::EndsWith(host, ".blob.fabric.microsoft.com");
+	if (storage_endpoint) {
+		auto service = host.find(".blob.");
+		if (service != string::npos) {
+			host.replace(service, 6, ".");
+		} else {
+			service = host.find(".dfs.");
+			if (service != string::npos) {
+				host.replace(service, 5, ".");
+			}
 		}
 	}
 	auto port = url.GetPort();
-	if (!azure_endpoint) {
+	if (!storage_endpoint) {
 		auto scheme = StringUtil::Lower(url.GetScheme());
 		if (port == 0) {
 			port = scheme == "https" ? 443 : 80;
@@ -137,13 +148,17 @@ static string GetMetadataCacheKey(const string &resolved_url) {
 	} else if (port != 0 && port != 80 && port != 443) {
 		host += ":" + to_string(port);
 	}
-	auto key = host + "/" + Azure::Core::Url::Encode(Azure::Core::Url::Decode(url.GetPath()), "/");
+	AzureMetadataCacheKey key;
+	key.account_or_onelake = std::move(host);
+	key.path = Azure::Core::Url::Decode(url.GetPath());
 	auto query = url.GetQueryParameters();
-	for (const auto &name : {"snapshot", "versionid"}) {
-		auto entry = query.find(name);
-		if (entry != query.end()) {
-			key += "\n" + string(name) + ":" + entry->second;
-		}
+	auto snapshot = query.find("snapshot");
+	if (snapshot != query.end()) {
+		key.snapshot = Azure::Core::Url::Decode(snapshot->second);
+	}
+	auto version = query.find("versionid");
+	if (version != query.end()) {
+		key.version = Azure::Core::Url::Decode(version->second);
 	}
 	return key;
 }

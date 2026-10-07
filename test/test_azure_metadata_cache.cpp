@@ -205,6 +205,10 @@ TEST_CASE("Azure metadata keys identify resolved objects across both filesystems
 	const string dfs_url = "https://account.dfs.core.windows.net/container/dir/file";
 	auto blob = GetCache(blob_fs, context.opener, "az://container/dir/file", blob_url);
 	REQUIRE(blob.cache == global_cache);
+	CHECK(blob.key.account_or_onelake == "account.core.windows.net");
+	CHECK(blob.key.path == "container/dir/file");
+	CHECK(blob.key.snapshot.empty());
+	CHECK(blob.key.version.empty());
 	for (const auto &path : {"azure://container/dir/file", "az://account.blob.core.windows.net/container/dir/file"}) {
 		auto alias = GetCache(blob_fs, context.opener, path, blob_url);
 		CHECK(alias.key == blob.key);
@@ -231,6 +235,10 @@ TEST_CASE("Azure metadata keys identify resolved objects across both filesystems
 	CHECK(signed_url.key == blob.key);
 	auto snapshot = GetCache(blob_fs, context.opener, "az://container/dir/file", blob_url + "?snapshot=old");
 	auto version = GetCache(blob_fs, context.opener, "az://container/dir/file", blob_url + "?versionid=old");
+	CHECK(snapshot.key.snapshot == "old");
+	CHECK(snapshot.key.version.empty());
+	CHECK(version.key.snapshot.empty());
+	CHECK(version.key.version == "old");
 	CHECK(snapshot.key != blob.key);
 	CHECK(version.key != blob.key);
 	CHECK(snapshot.key != version.key);
@@ -239,6 +247,156 @@ TEST_CASE("Azure metadata keys identify resolved objects across both filesystems
 	auto other_endpoint = GetCache(blob_fs, context.opener, "az://container/dir/file",
 	                               "https://account.blob.core.chinacloudapi.cn/container/dir/file");
 	CHECK(other_endpoint.key != blob.key);
+}
+
+TEST_CASE("Azure structured cache keys compare and hash every identity field", "[azure_metadata_cache]") {
+	AzureMetadataCache cache(false);
+	const vector<AzureMetadataCacheKey> keys {{"account.core.windows.net", "container/file", "", ""},
+	                                          {"other.core.windows.net", "container/file", "", ""},
+	                                          {"account.core.windows.net", "other-container/file", "", ""},
+	                                          {"account.core.windows.net", "container/file", "old", ""},
+	                                          {"account.core.windows.net", "container/file", "", "old"},
+	                                          {"account.core.windows.net", "container/file", "old", "new"},
+	                                          {"account.core.windows.net", "container/file\nsnapshot:old", "", ""}};
+	for (idx_t i = 0; i < keys.size(); i++) {
+		AzureFileInfo info;
+		info.length = i + 1;
+		cache.Insert(keys[i], info);
+	}
+	for (idx_t i = 0; i < keys.size(); i++) {
+		AzureFileInfo info;
+		auto copy = keys[i];
+		CHECK(copy == keys[i]);
+		CHECK(AzureMetadataCacheKeyHash()(copy) == AzureMetadataCacheKeyHash()(keys[i]));
+		REQUIRE(cache.Find(copy, info));
+		CHECK(info.length == i + 1);
+	}
+	cache.Erase(keys[3]);
+	AzureFileInfo info;
+	CHECK(!cache.Find(keys[3], info));
+	REQUIRE(cache.Find(keys[4], info));
+	CHECK(info.length == 5);
+}
+
+TEST_CASE("OneLake Blob and DFS URLs share structured workspace and item identities", "[azure_metadata_cache]") {
+	CacheTestContext context;
+	Execute(context.con, "SET enable_http_metadata_cache = true");
+	auto global_cache = make_shared_ptr<AzureMetadataCache>(false);
+	TestDfsFileSystem dfs_fs(global_cache);
+	TestBlobFileSystem blob_fs(global_cache);
+	const string workspace = "11111111-1111-1111-1111-111111111111";
+	const string item_path = "22222222-2222-2222-2222-222222222222/Files/data.parquet";
+	const string path = "abfss://" + workspace + "@onelake.dfs.fabric.microsoft.com/" + item_path;
+	Azure::Storage::Files::DataLake::DataLakeServiceClient service("https://onelake.dfs.fabric.microsoft.com");
+	auto client = service.GetFileSystemClient(workspace).GetFileClient(item_path);
+	auto cache = GetCache(dfs_fs, context.opener, path, client.GetUrl());
+	REQUIRE(cache.cache == global_cache);
+	CHECK(cache.key.account_or_onelake == "onelake.fabric.microsoft.com");
+	CHECK(cache.key.path == workspace + "/" + item_path);
+	CHECK(cache.key.snapshot.empty());
+	CHECK(cache.key.version.empty());
+
+	for (const auto &scheme : {"abfs://", "abfss://"}) {
+		auto qualified_path = string(scheme) + "onelake.dfs.fabric.microsoft.com/" + workspace + "/" + item_path;
+		auto alias = GetCache(dfs_fs, context.opener, qualified_path, client.GetUrl());
+		CHECK(alias.key == cache.key);
+	}
+	auto blob_path = "az://onelake.blob.fabric.microsoft.com/" + workspace + "/" + item_path;
+	Azure::Storage::Blobs::BlobServiceClient blob_service("https://onelake.blob.fabric.microsoft.com");
+	auto blob_client = blob_service.GetBlobContainerClient(workspace).GetBlockBlobClient(item_path);
+	auto blob = GetCache(blob_fs, context.opener, blob_path, blob_client.GetUrl());
+	CHECK(blob.key == cache.key);
+	CHECK(blob.cache == cache.cache);
+	for (const auto &scheme : {"az://", "azure://"}) {
+		auto alias = GetCache(blob_fs, context.opener,
+		                      string(scheme) + "onelake.blob.fabric.microsoft.com/" + workspace + "/" + item_path,
+		                      blob_client.GetUrl());
+		CHECK(alias.key == cache.key);
+	}
+	auto explicit_port = GetCache(dfs_fs, context.opener, path,
+	                              "https://onelake.dfs.fabric.microsoft.com:443/" + workspace + "/" + item_path);
+	CHECK(explicit_port.key == cache.key);
+
+	AzureFileInfo info;
+	info.length = 42;
+	cache.cache->Insert(cache.key, info);
+	AzureFileInfo cached;
+	REQUIRE(blob.cache->Find(blob.key, cached));
+	CHECK(cached.length == 42);
+	blob.Invalidate();
+	CHECK(!cache.cache->Find(cache.key, cached));
+	info.length = 84;
+	blob.cache->Insert(blob.key, info);
+	REQUIRE(cache.cache->Find(cache.key, cached));
+	CHECK(cached.length == 84);
+	cache.Invalidate();
+	CHECK(!blob.cache->Find(blob.key, cached));
+
+	auto other = service.GetFileSystemClient("other-workspace").GetFileClient(item_path);
+	auto other_cache =
+	    GetCache(dfs_fs, context.opener, "abfss://other-workspace@onelake.dfs.fabric.microsoft.com/" + item_path,
+	             other.GetUrl());
+	CHECK(other_cache.key.account_or_onelake == cache.key.account_or_onelake);
+	CHECK(other_cache.key != cache.key);
+	CHECK(other_cache.key.path == "other-workspace/" + item_path);
+	auto named = service.GetFileSystemClient("Workspace").GetFileClient("Lakehouse.Lakehouse/Files/file name.parquet");
+	auto named_cache =
+	    GetCache(dfs_fs, context.opener,
+	             "abfss://Workspace@onelake.dfs.fabric.microsoft.com/Lakehouse.Lakehouse/Files/file name.parquet",
+	             named.GetUrl());
+	CHECK(named_cache.key.path == "Workspace/Lakehouse.Lakehouse/Files/file name.parquet");
+	Execute(context.con, "SET enable_http_metadata_cache = false");
+	auto local = GetCache(dfs_fs, context.opener, path, client.GetUrl());
+	REQUIRE(local.cache != global_cache);
+	CHECK(local.key == cache.key);
+	local.cache->Insert(local.key, info);
+	global_cache->Insert(cache.key, info);
+	local.Invalidate();
+	CHECK(!local.cache->Find(local.key, cached));
+	CHECK(!global_cache->Find(cache.key, cached));
+}
+
+TEST_CASE("OneLake regional and private endpoints canonicalize Blob and DFS services", "[azure_metadata_cache]") {
+	CacheTestContext context;
+	Execute(context.con, "SET enable_http_metadata_cache = true");
+	auto global_cache = make_shared_ptr<AzureMetadataCache>(false);
+	TestDfsFileSystem dfs_fs(global_cache);
+	TestBlobFileSystem blob_fs(global_cache);
+	const string object_path = "workspace/Lakehouse.Lakehouse/Files/data.parquet";
+	for (const auto &authority : {"westus-onelake", "11111111111111111111111111111111.z11"}) {
+		const auto dfs_host = string(authority) + ".dfs.fabric.microsoft.com";
+		const auto blob_host = string(authority) + ".blob.fabric.microsoft.com";
+		const auto dfs_path = "abfss://" + dfs_host + "/" + object_path;
+		const auto blob_path = "az://" + blob_host + "/" + object_path;
+		auto dfs = GetCache(dfs_fs, context.opener, dfs_path, "https://" + dfs_host + "/" + object_path);
+		auto blob = GetCache(blob_fs, context.opener, blob_path, "https://" + blob_host + "/" + object_path);
+		CHECK(dfs.key == blob.key);
+		CHECK(dfs.key.account_or_onelake == string(authority) + ".fabric.microsoft.com");
+		CHECK(dfs.key.path == object_path);
+		auto azure_account = GetCache(blob_fs, context.opener, "az://onelake.blob.core.windows.net/" + object_path,
+		                              "https://onelake.blob.core.windows.net/" + object_path);
+		CHECK(azure_account.key != dfs.key);
+	}
+}
+
+TEST_CASE("OneLake keys keep optional selectors independent of paths and credentials", "[azure_metadata_cache]") {
+	CacheTestContext context;
+	Execute(context.con, "SET enable_http_metadata_cache = true");
+	auto global_cache = make_shared_ptr<AzureMetadataCache>(false);
+	TestDfsFileSystem dfs_fs(global_cache);
+	const string path = "abfss://workspace@onelake.dfs.fabric.microsoft.com/Lakehouse.Lakehouse/Files/file";
+	const string url = "https://onelake.dfs.fabric.microsoft.com/workspace/Lakehouse.Lakehouse/Files/file";
+	auto first =
+	    GetCache(dfs_fs, context.opener, path, url + "?snapshot=2026-10-07T12%3A00%3A00Z&versionid=v%2B1&sig=first");
+	auto second =
+	    GetCache(dfs_fs, context.opener, path, url + "?sig=second&versionid=v%2B1&snapshot=2026-10-07T12:00:00Z");
+	CHECK(first.key == second.key);
+	CHECK(first.key.account_or_onelake == "onelake.fabric.microsoft.com");
+	CHECK(first.key.path == "workspace/Lakehouse.Lakehouse/Files/file");
+	CHECK(first.key.snapshot == "2026-10-07T12:00:00Z");
+	CHECK(first.key.version == "v+1");
+	auto literal = GetCache(dfs_fs, context.opener, path, url + "%3Fsnapshot=2026-10-07T12:00:00Z");
+	CHECK(literal.key != first.key);
 }
 
 TEST_CASE("Azure global metadata does not collide across accounts or custom endpoints", "[azure_metadata_cache]") {
@@ -270,6 +428,9 @@ TEST_CASE("Azure global metadata does not collide across accounts or custom endp
 	auto http_default = fs.CacheFor(context.opener, path, "http://127.0.0.1:80/account/container/file");
 	auto https_default = fs.CacheFor(context.opener, path, "https://127.0.0.1:443/account/container/file");
 	CHECK(http_default.key != https_default.key);
+	auto custom_blob = fs.CacheFor(context.opener, path, "https://account.blob.example.com/container/file");
+	auto custom_dfs = fs.CacheFor(context.opener, path, "https://account.dfs.example.com/container/file");
+	CHECK(custom_blob.key != custom_dfs.key);
 }
 
 TEST_CASE("Azure query-local metadata expires at query end including the legacy fallback", "[azure_metadata_cache]") {

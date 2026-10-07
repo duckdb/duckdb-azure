@@ -134,6 +134,12 @@ Azure file metadata is reused within a query by default. Set
 connections in the same database. Blob and DFS share this cache, keyed by the
 resolved object location rather than the spelling of its DuckDB URI.
 
+Cache keys have separate account/OneLake authority, full path (including the
+container or OneLake workspace), snapshot, and version fields. Blob and DFS
+spellings of an authority share an identity, including OneLake global, regional,
+and workspace-private endpoints. Different authorities and object paths remain
+isolated; authentication query parameters are not part of the key.
+
 Shared caching requires an account resolved from the URI or a matching secret.
 Legacy settings without a resolved account fall back to query-local caching.
 Writes invalidate both caches at open, sync, and close, including when the

@@ -35,24 +35,44 @@ struct AzureFileInfo {
 	string etag;
 };
 
+struct AzureMetadataCacheKey {
+	string account_or_onelake;
+	string path;
+	string snapshot;
+	string version;
+
+	bool operator==(const AzureMetadataCacheKey &other) const {
+		return account_or_onelake == other.account_or_onelake && path == other.path && snapshot == other.snapshot &&
+		       version == other.version;
+	}
+
+	bool operator!=(const AzureMetadataCacheKey &other) const {
+		return !(*this == other);
+	}
+};
+
+struct AzureMetadataCacheKeyHash {
+	uint64_t operator()(const AzureMetadataCacheKey &key) const;
+};
+
 class AzureMetadataCache : public ClientContextState {
 public:
 	explicit AzureMetadataCache(bool flush_on_query_end_p) : flush_on_query_end(flush_on_query_end_p) {
 	}
 
-	void Insert(const string &path, const AzureFileInfo &val) {
+	void Insert(const AzureMetadataCacheKey &key, const AzureFileInfo &val) {
 		lock_guard<mutex> parallel_lock(lock);
-		map[path] = val;
+		map[key] = val;
 	}
 
-	void Erase(const string &path) {
+	void Erase(const AzureMetadataCacheKey &key) {
 		lock_guard<mutex> parallel_lock(lock);
-		map.erase(path);
+		map.erase(key);
 	}
 
-	bool Find(const string &path, AzureFileInfo &ret_val) {
+	bool Find(const AzureMetadataCacheKey &key, AzureFileInfo &ret_val) {
 		lock_guard<mutex> parallel_lock(lock);
-		auto lookup = map.find(path);
+		auto lookup = map.find(key);
 		if (lookup == map.end()) {
 			return false;
 		}
@@ -74,14 +94,14 @@ public:
 private:
 	// Query-local caches are still shared across parallel tasks within a query.
 	mutex lock;
-	unordered_map<string, AzureFileInfo> map;
+	unordered_map<AzureMetadataCacheKey, AzureFileInfo, AzureMetadataCacheKeyHash> map;
 	bool flush_on_query_end;
 };
 
 struct AzureMetadataCacheHandle {
 	shared_ptr<AzureMetadataCache> cache;
 	shared_ptr<AzureMetadataCache> global_cache;
-	string key;
+	AzureMetadataCacheKey key;
 
 	void Invalidate() const {
 		if (cache) {
