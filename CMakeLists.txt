@@ -57,10 +57,12 @@ if(BUILD_UNITTESTS)
   add_executable(azure_metadata_cache_test test/test_azure_metadata_cache.cpp)
   target_include_directories(azure_metadata_cache_test
                              PRIVATE "${CMAKE_SOURCE_DIR}/third_party/catch")
-  target_link_libraries(azure_metadata_cache_test ${EXTENSION_NAME} duckdb_static)
+  target_link_libraries(azure_metadata_cache_test ${EXTENSION_NAME}
+                        duckdb_static)
   link_extension_libraries(azure_metadata_cache_test "")
-  set_target_properties(azure_metadata_cache_test PROPERTIES
-                        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test")
+  set_target_properties(
+    azure_metadata_cache_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                         "${CMAKE_BINARY_DIR}/test")
 endif()
 
 install(
