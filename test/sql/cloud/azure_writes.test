@@ -139,3 +139,62 @@ statement ok
 RESET azure_write_staged_blocks_per_commit;
 
 endloop
+
+# Both protocols address the same HNS account for cross-filesystem invalidation.
+statement ok
+CREATE SECRET hns_blob_authn (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}',
+    SCOPE 'az://{ABFSS_STORAGE_ACCOUNT}.blob.core.windows.net/'
+);
+
+statement ok
+SET enable_external_file_cache = false;
+
+statement ok
+SET enable_http_metadata_cache = true;
+
+statement ok
+COPY (SELECT i FROM range(10) t(i))
+TO 'abfss://{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv' (HEADER false);
+
+query I
+SELECT count(*)
+FROM read_csv('az://{ABFSS_STORAGE_ACCOUNT}.blob.core.windows.net/{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv',
+              header = false, columns = {'i': 'BIGINT'});
+----
+10
+
+statement ok
+COPY (SELECT i FROM range(1000) t(i))
+TO 'abfss://{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv' (HEADER false);
+
+query I
+SELECT count(*)
+FROM read_csv('az://{ABFSS_STORAGE_ACCOUNT}.blob.core.windows.net/{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv',
+              header = false, columns = {'i': 'BIGINT'});
+----
+1000
+
+query I
+SELECT count(*)
+FROM read_csv('abfss://{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv',
+              header = false, columns = {'i': 'BIGINT'});
+----
+1000
+
+statement ok
+COPY (SELECT i FROM range(100) t(i))
+TO 'az://{ABFSS_STORAGE_ACCOUNT}.blob.core.windows.net/{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv'
+(HEADER false);
+
+query I
+SELECT count(*)
+FROM read_csv('abfss://{ABFSS_TEMP_DIR}/metadata-cache-cross-filesystem.csv',
+              header = false, columns = {'i': 'BIGINT'});
+----
+100
+
+statement ok
+RESET enable_http_metadata_cache;

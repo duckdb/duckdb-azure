@@ -8,7 +8,7 @@ defaults:
     shell: bash
 
 env:
-  VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
+  VCPKG_COMMIT_ID: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
 
 jobs:
   azurite-tests-linux:
@@ -72,6 +72,9 @@ jobs:
       - name: Test extension
         run: |
           scripts/env_azurite make test
+
+      - name: Test metadata cache regressions
+        run: ./build/release/test/azure_metadata_cache_test
 
       - name: Run test data integrity check
         run: |
@@ -143,6 +146,9 @@ jobs:
         shell: bash
         run: |
           scripts/env_azurite make test
+
+      - name: Test metadata cache regressions
+        run: ./build/release/test/azure_metadata_cache_test
 
       - name: Run test data integrity check
         run: |
@@ -216,6 +222,10 @@ jobs:
         shell: bash
         run: |
           scripts/env_azurite build/release/test/unittest.exe --test-dir . "[sql]"
+
+      - name: Test metadata cache regressions
+        shell: bash
+        run: ./build/release/test/azure_metadata_cache_test.exe
 
       - name: Run test data integrity check
         shell: bash

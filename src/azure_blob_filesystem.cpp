@@ -75,9 +75,9 @@ AzureBlobContextState::GetBlobContainerClient(const std::string &blobContainerNa
 //////// AzureBlobStorageFileHandle ////////
 AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info,
                                                        FileOpenFlags flags, const AzureOptions &opts,
-                                                       optional_ptr<AzureMetadataCache> metadata_cache,
+                                                       AzureMetadataCacheHandle metadata_cache,
                                                        Azure::Storage::Blobs::BlockBlobClient blob_client)
-    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, opts, metadata_cache),
+    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, opts, std::move(metadata_cache)),
       blob_client(std::move(blob_client)) {
 }
 
@@ -111,6 +111,7 @@ void AzureBlobStorageFileHandle::Sync() {
 		last_modified = AzureBlobStorageFileSystem::ToTimestamp(res.Value.LastModified);
 		committed_block_count += staged_block_count;
 		staged_block_count = 0;
+		InvalidateMetadata();
 	} catch (const Azure::Storage::StorageException &e) {
 		throw IOException("AzureBlobStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -119,10 +120,15 @@ void AzureBlobStorageFileHandle::Sync() {
 
 void AzureBlobStorageFileHandle::Close() {
 	Sync();
+	InvalidateMetadata();
 	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureBlobStorageFileSystem ////////
+AzureBlobStorageFileSystem::AzureBlobStorageFileSystem(shared_ptr<AzureMetadataCache> metadata_cache)
+    : AzureStorageFileSystem(std::move(metadata_cache)) {
+}
+
 unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                      optional_ptr<FileOpener> opener) {
 	if (!opener) {
@@ -140,14 +146,15 @@ unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenF
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
-	if (flags.OpenForWriting() || flags.OpenForAppending()) {
-		InvalidateMetadata(opener, info.path);
-	}
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(parsed_url.container);
 	auto blob_client = container.GetBlockBlobClient(parsed_url.path);
+	auto metadata_cache = GetMetadataCache(opener, info.path, parsed_url, blob_client.GetUrl());
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		metadata_cache.Invalidate();
+	}
 
 	auto handle = make_uniq<AzureBlobStorageFileHandle>(*this, info, flags, storage_context->options,
-	                                                    GetMetadataCache(opener), std::move(blob_client));
+	                                                    std::move(metadata_cache), std::move(blob_client));
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -214,16 +221,14 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 				OpenFileInfo info(result_full_url);
 				info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 				auto &options = info.extended_info->options;
-				// Flat Blob listing on HNS accounts can surface directories as zero-length Blob entries.
-				// Only stamp a file type when the item is clearly a non-empty file so we can seed the cache
-				// without misclassifying folders.
+				// Zero-length entries may be HNS directories; leave their ETag unset to check the type on open.
 				if (key.BlobSize > 0) {
 					options.emplace("type", Value("file"));
 				}
 				options.emplace("file_size", Value::BIGINT(key.BlobSize));
 				options.emplace("last_modified", Value::TIMESTAMP(ToTimestamp(key.Details.LastModified)));
 				auto etag = StripETagQuotes(key.Details.ETag.ToString());
-				if (!etag.empty()) {
+				if (key.BlobSize > 0 && !etag.empty()) {
 					options.emplace("etag", Value(std::move(etag)));
 				}
 				result.push_back(info);
@@ -401,7 +406,7 @@ void AzureBlobStorageFileSystem::RemoveFile(const string &filename, optional_ptr
 	auto blob_client = container.GetBlockBlobClient(url.path);
 	try {
 		blob_client.Delete();
-		InvalidateMetadata(opener, filename);
+		InvalidateMetadata(opener, filename, url, blob_client.GetUrl());
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureBlobStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -415,7 +420,7 @@ bool AzureBlobStorageFileSystem::TryRemoveFile(const string &filename, optional_
 	auto blob_client = container.GetBlockBlobClient(url.path);
 	auto removed = blob_client.DeleteIfExists().Value.Deleted;
 	if (removed) {
-		InvalidateMetadata(opener, filename);
+		InvalidateMetadata(opener, filename, url, blob_client.GetUrl());
 	}
 	return removed;
 }

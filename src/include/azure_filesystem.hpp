@@ -31,7 +31,7 @@ struct AzureOptions {
 struct AzureFileInfo {
 	FileType file_type = FileType::FILE_TYPE_INVALID;
 	idx_t length = 0;
-	timestamp_t last_modified;
+	timestamp_t last_modified = timestamp_t(0);
 	string etag;
 };
 
@@ -78,6 +78,21 @@ private:
 	bool flush_on_query_end;
 };
 
+struct AzureMetadataCacheHandle {
+	shared_ptr<AzureMetadataCache> cache;
+	shared_ptr<AzureMetadataCache> global_cache;
+	string key;
+
+	void Invalidate() const {
+		if (cache) {
+			cache->Erase(key);
+		}
+		if (global_cache && global_cache != cache) {
+			global_cache->Erase(key);
+		}
+	}
+};
+
 class AzureContextState : public ClientContextState {
 public:
 	const AzureOptions options;
@@ -110,6 +125,7 @@ class AzureFileHandle : public FileHandle {
 public:
 	virtual bool PostConstruct();
 	void SetFileInfo(FileType file_type_p, idx_t length_p, timestamp_t last_modified_p, const string &etag_p);
+	void InvalidateMetadata();
 
 	bool IsRemoteLoaded() {
 		return is_remote_loaded;
@@ -121,7 +137,7 @@ public:
 
 protected:
 	AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags, FileType file_type,
-	                const AzureOptions &options, optional_ptr<AzureMetadataCache> metadata_cache);
+	                const AzureOptions &options, AzureMetadataCacheHandle metadata_cache);
 
 public:
 	FileOpenFlags flags;
@@ -142,11 +158,13 @@ public:
 	idx_t buffer_start;
 	idx_t buffer_end;
 	const AzureOptions options;
-	optional_ptr<AzureMetadataCache> metadata_cache;
+	AzureMetadataCacheHandle metadata_cache;
 };
 
 class AzureStorageFileSystem : public FileSystem {
 public:
+	explicit AzureStorageFileSystem(shared_ptr<AzureMetadataCache> global_metadata_cache);
+
 	// FS methods
 	duckdb::unique_ptr<FileHandle> OpenFile(const string &path, FileOpenFlags flags,
 	                                        optional_ptr<FileOpener> opener = nullptr) override;
@@ -195,17 +213,17 @@ protected:
 	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
 	static AzureOptions ParseAzureOptions(optional_ptr<FileOpener> opener);
 	static bool ParseAzureMetadataCacheEnabled(optional_ptr<FileOpener> opener);
-	optional_ptr<AzureMetadataCache> GetMetadataCache(optional_ptr<FileOpener> opener);
-	void InvalidateMetadata(optional_ptr<FileOpener> opener, const string &path);
+	AzureMetadataCacheHandle GetMetadataCache(optional_ptr<FileOpener> opener, const string &path,
+	                                          const AzureParsedUrl &parsed_url, const string &resolved_url);
+	void InvalidateMetadata(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed_url,
+	                        const string &resolved_url);
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);
 	static string StripETagQuotes(string etag);
 
 private:
-	optional_ptr<AzureMetadataCache> GetGlobalMetadataCache();
-	mutex global_cache_lock;
-	duckdb::unique_ptr<AzureMetadataCache> global_metadata_cache;
+	shared_ptr<AzureMetadataCache> global_metadata_cache;
 };
 
 } // namespace duckdb

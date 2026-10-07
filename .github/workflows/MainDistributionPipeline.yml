@@ -17,7 +17,6 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       extension_name: &ext_name azure
-      duckdb_version: &duckdb_ref fc4002c6e36f1e2d17d7c5b1a604777d69238d2b # v2.0-cyanoptera 2026-09-11 pin
       ci_tools_version: &ci_tools_ref main
       exclude_archs: &exclude_archs wasm_mvp;wasm_eh;wasm_threads;windows_amd64_rtools;windows_amd64_mingw
 
@@ -28,7 +27,6 @@ jobs:
     secrets: inherit
     with:
       extension_name: *ext_name
-      duckdb_version: *duckdb_ref
       ci_tools_version: *ci_tools_ref
       exclude_archs: *exclude_archs
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
@@ -39,7 +37,7 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
       extension_name: *ext_name
-      duckdb_version: *duckdb_ref
+      duckdb_version: 96063b9e39749cc0f087bb11501d7edbee527957
       ci_tools_version: *ci_tools_ref
       # TODO: format_checks += ;tidy
       format_checks: format

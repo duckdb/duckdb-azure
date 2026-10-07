@@ -12,3 +12,11 @@ make test_python
 ```
 
 For other client tests check the makefile in the root of this repository.
+
+The `azure_metadata_cache_test` C++ target covers extended open metadata, cache
+identity and lifetime, and Blob/DFS sync and close invalidation without Azure
+credentials. It is built with `BUILD_UNITTESTS` and runs in the local-test CI jobs:
+
+```bash
+build/release/test/azure_metadata_cache_test
+```

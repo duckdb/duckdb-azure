@@ -108,9 +108,9 @@ AzureDfsContextState::GetDfsFileSystemClient(const std::string &file_system_name
 //////// AzureDfsContextState ////////
 AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info,
                                                      FileOpenFlags flags, const AzureOptions &options,
-                                                     optional_ptr<AzureMetadataCache> metadata_cache,
+                                                     AzureMetadataCacheHandle metadata_cache,
                                                      Azure::Storage::Files::DataLake::DataLakeFileClient client)
-    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, options, metadata_cache),
+    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, options, std::move(metadata_cache)),
       file_client(std::move(client)) {
 }
 
@@ -139,6 +139,7 @@ void AzureDfsStorageFileHandle::Sync(bool close) {
 		file_client.Flush(staged_offset, flush_opts);
 		committed_block_count += staged_block_count;
 		staged_block_count = 0;
+		InvalidateMetadata();
 	} catch (const Azure::Storage::StorageException &e) {
 		throw IOException("AzureDfsStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -147,10 +148,15 @@ void AzureDfsStorageFileHandle::Sync(bool close) {
 
 void AzureDfsStorageFileHandle::Close() {
 	Sync(true);
+	InvalidateMetadata();
 	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureDfsStorageFileSystem ////////
+AzureDfsStorageFileSystem::AzureDfsStorageFileSystem(shared_ptr<AzureMetadataCache> metadata_cache)
+    : AzureStorageFileSystem(std::move(metadata_cache)) {
+}
+
 unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
 	if (!opener) {
@@ -168,9 +174,6 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 
 	auto parsed_url = ParseUrl(info.path);
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
-	if (flags.OpenForWriting() || flags.OpenForAppending()) {
-		InvalidateMetadata(opener, info.path);
-	}
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(parsed_url.container);
 
 	// A trailing '/' is only a directory hint, not part of the resource name. Some DFS endpoints (e.g. OneLake)
@@ -180,9 +183,13 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 		file_path.pop_back();
 	}
 
-	auto handle =
-	    make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options, GetMetadataCache(opener),
-	                                         file_system_client.GetFileClient(file_path));
+	auto file_client = file_system_client.GetFileClient(file_path);
+	auto metadata_cache = GetMetadataCache(opener, info.path, parsed_url, file_client.GetUrl());
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		metadata_cache.Invalidate();
+	}
+	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options,
+	                                                   std::move(metadata_cache), std::move(file_client));
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -205,8 +212,9 @@ void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_
 	auto dir_url = ParseUrl(dirname);
 	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(dir_url.container);
-	file_system_client.GetDirectoryClient(dir_url.path).Create();
-	InvalidateMetadata(opener, dirname);
+	auto dir_client = file_system_client.GetDirectoryClient(dir_url.path);
+	dir_client.Create();
+	InvalidateMetadata(opener, dirname, dir_url, dir_client.GetUrl());
 }
 
 bool AzureDfsStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
@@ -221,7 +229,7 @@ void AzureDfsStorageFileSystem::RemoveFile(const string &filename, optional_ptr<
 	auto file_client = file_system_client.GetFileClient(url.path);
 	try {
 		file_client.Delete();
-		InvalidateMetadata(opener, filename);
+		InvalidateMetadata(opener, filename, url, file_client.GetUrl());
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureDfsStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -235,7 +243,7 @@ bool AzureDfsStorageFileSystem::TryRemoveFile(const string &filename, optional_p
 	auto file_client = file_system_client.GetFileClient(url.path);
 	auto removed = file_client.DeleteIfExists().Value.Deleted;
 	if (removed) {
-		InvalidateMetadata(opener, filename);
+		InvalidateMetadata(opener, filename, url, file_client.GetUrl());
 	}
 	return removed;
 }

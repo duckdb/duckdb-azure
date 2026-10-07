@@ -28,7 +28,7 @@ class AzureBlobStorageFileSystem;
 class AzureBlobStorageFileHandle : public AzureFileHandle {
 public:
 	AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-	                           const AzureOptions &options, optional_ptr<AzureMetadataCache> metadata_cache,
+	                           const AzureOptions &options, AzureMetadataCacheHandle metadata_cache,
 	                           Azure::Storage::Blobs::BlockBlobClient blob_client);
 	~AzureBlobStorageFileHandle() override = default;
 
@@ -46,6 +46,8 @@ public:
 
 class AzureBlobStorageFileSystem : public AzureStorageFileSystem {
 public:
+	explicit AzureBlobStorageFileSystem(shared_ptr<AzureMetadataCache> metadata_cache);
+
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool ListFilesExtended(const string &directory, const std::function<void(OpenFileInfo &info)> &callback,
 	                       optional_ptr<FileOpener> opener) override;

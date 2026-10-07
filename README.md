@@ -127,6 +127,19 @@ The block size can be any positive value up to 4,000 MiB (Azure's per-request li
 | `azure_write_block_size` | `8MiB` | Size of each block for Blob/DFS writes. `0` restores the default. Max 4,000 MiB. Increase to raise the file size ceiling. |
 | `azure_write_staged_blocks_per_commit` | `0` | Blocks staged before an intermediate commit. `0` disables intermediate commits; partial writes are not visible until the file is closed. |
 
+## Metadata caching
+
+Azure file metadata is reused within a query by default. Set
+`enable_http_metadata_cache = true` to also reuse it across queries and
+connections in the same database. Blob and DFS share this cache, keyed by the
+resolved object location rather than the spelling of its DuckDB URI.
+
+Shared caching requires an account resolved from the URI or a matching secret.
+Legacy settings without a resolved account fall back to query-local caching.
+Writes invalidate both caches at open, sync, and close, including when the
+writer has shared caching disabled. Deletes and directory creation also
+invalidate cached metadata. Changes made outside this extension are not tracked.
+
 ## Supported architectures
 
 The extension is tested & distributed for Linux (x64, arm64), MacOS (x64, arm64) and Windows (x64)
