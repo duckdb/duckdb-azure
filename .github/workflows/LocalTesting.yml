@@ -18,7 +18,7 @@ jobs:
       VCPKG_TARGET_TRIPLET: x64-linux
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       GEN: ninja
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       HTTP_PROXY_RUNNING: "1"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
@@ -41,7 +41,7 @@ jobs:
 
       - name: Launch & populate Azure test service
         run: |
-          azurite --skipApiVersionCheck > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
           sudo ./scripts/run_squid.sh --port 3128 --log_dir squid_logs &
           sudo ./scripts/run_squid.sh --port 3129 --log_dir squid_auth_logs --auth &
           sleep 10
@@ -99,7 +99,7 @@ jobs:
       OSX_BUILD_ARCH: x86_64
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
@@ -119,7 +119,7 @@ jobs:
       - name: Launch & populate Azure test service
         run: |
           npm install -g azurite
-          azurite --skipApiVersionCheck > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
 
@@ -164,7 +164,7 @@ jobs:
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
       GEN: ninja
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
@@ -184,7 +184,7 @@ jobs:
       - name: Launch & populate Azure test service
         run: |
           npm install -g azurite
-          azurite --skipApiVersionCheck > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
 
