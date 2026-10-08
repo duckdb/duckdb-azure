@@ -1,5 +1,10 @@
 name: Azurite (local) functional tests
-on: [push, pull_request, repository_dispatch]
+on:
+  push:
+    branches: [main, "v[12].[0-9]+-[a-zA-Z]*"]
+  pull_request:
+  repository_dispatch:
+  workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -13,12 +18,12 @@ env:
 jobs:
   azurite-tests-linux:
     name: Azurite tests (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
     env:
       VCPKG_TARGET_TRIPLET: x64-linux
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       GEN: ninja
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       HTTP_PROXY_RUNNING: "1"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
@@ -41,7 +46,7 @@ jobs:
 
       - name: Launch & populate Azure test service
         run: |
-          azurite --skipApiVersionCheck > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
           sudo ./scripts/run_squid.sh --port 3128 --log_dir squid_logs &
           sudo ./scripts/run_squid.sh --port 3129 --log_dir squid_auth_logs --auth &
           sleep 10
@@ -78,7 +83,7 @@ jobs:
 
       - name: Run test data integrity check
         run: |
-          ./build/release/duckdb -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
+          ./build/release/duckdb -unsigned -c "LOAD './build/release/extension/azure/azure.duckdb_extension'; CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
           DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 scripts/env_azurite ./build/release/test/unittest "*test/sql/test_data_integrity.test"
 
       - name: Azure test server log
@@ -96,13 +101,13 @@ jobs:
 
   azurite-tests-macos:
     name: Azurite tests (MacOS)
-    runs-on: macos-latest
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-macos-arm64' || 'macos-latest' }}
     env:
       VCPKG_TARGET_TRIPLET: x64-osx
       OSX_BUILD_ARCH: x86_64
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
@@ -122,7 +127,7 @@ jobs:
       - name: Launch & populate Azure test service
         run: |
           npm install -g azurite
-          azurite --skipApiVersionCheck > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
 
@@ -152,7 +157,7 @@ jobs:
 
       - name: Run test data integrity check
         run: |
-          ./build/release/duckdb -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
+          ./build/release/duckdb -unsigned -c "LOAD './build/release/extension/azure/azure.duckdb_extension'; CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
           DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 scripts/env_azurite ./build/release/test/unittest "*test/sql/test_data_integrity.test"
 
       - name: Azure test server log
@@ -164,13 +169,13 @@ jobs:
 
   azurite-tests-windows:
     name: Azurite tests (Windows)
-    runs-on: windows-latest
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-windows-x64' || 'windows-latest' }}
     env:
-      VCPKG_TARGET_TRIPLET: x64-windows
+      VCPKG_TARGET_TRIPLET: x64-windows-static-release
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
       GEN: ninja
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
@@ -190,7 +195,7 @@ jobs:
       - name: Launch & populate Azure test service
         run: |
           npm install -g azurite
-          azurite --skipApiVersionCheck > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
 
@@ -232,7 +237,7 @@ jobs:
         run: |
           ls build
           ls build/release
-          ./build/release/duckdb.exe -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
+          ./build/release/duckdb.exe -unsigned -c "LOAD './build/release/extension/azure/azure.duckdb_extension'; CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
           DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 scripts/env_azurite build/release/test/unittest.exe "*test/sql/test_data_integrity.test"
 
       - name: Azure test server log

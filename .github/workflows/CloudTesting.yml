@@ -3,6 +3,7 @@ on:
   push:
     branches: [main, v1.5-variegata, v1.4-andium]
   repository_dispatch:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
@@ -14,7 +15,7 @@ defaults:
 jobs:
   azure-tests-linux:
     name: Azure tests (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
     env:
       # NOTE: container/authn env is managed in scripts/env_azure so that local test
       # runs are easily managed; actual secrets are still loaded here via 1password in
@@ -104,7 +105,7 @@ jobs:
         env:
           DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE: 1
         run: |
-          scripts/env_azure ./build/release/duckdb -c "CREATE PERSISTENT SECRET az_authn_persistent (TYPE AZURE, PROVIDER SERVICE_PRINCIPAL, TENANT_ID '${{secrets.AZURE_TENANT_ID}}', CLIENT_ID '${{secrets.AZURE_CLIENT_ID}}', CLIENT_SECRET '${{secrets.AZURE_CLIENT_SECRET}}', ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}', SCOPE 'az://')"
+          scripts/env_azure ./build/release/duckdb -unsigned -c "LOAD './build/release/extension/azure/azure.duckdb_extension'; CREATE PERSISTENT SECRET az_authn_persistent (TYPE AZURE, PROVIDER SERVICE_PRINCIPAL, TENANT_ID '${{secrets.AZURE_TENANT_ID}}', CLIENT_ID '${{secrets.AZURE_CLIENT_ID}}', CLIENT_SECRET '${{secrets.AZURE_CLIENT_SECRET}}', ACCOUNT_NAME '${AZ_STORAGE_ACCOUNT}', SCOPE 'az://')"
           scripts/env_azure ./build/release/test/unittest "test/sql/test_data_integrity.test"
 
       - name: Test with Service Principal (SPN) in env vars (==slow)
