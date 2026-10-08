@@ -106,6 +106,11 @@ visible until committed which occurs during a sync or close call. Thus large
 uploads may not be visible to standard Azure tooling until whole file has been
 written.
 
+The Blob writer (`az://` or `azure://`) uses block-list uploads, which cannot
+overwrite files created or overwritten through DFS (`abfs://` or `abfss://`).
+Use DFS for subsequent writes to those files to avoid `BlobOperationNotSupported`.
+They remain readable through either endpoint, including on OneLake.
+
 ### File size limit
 
 Azure [hard-limits a blob to **50,000
