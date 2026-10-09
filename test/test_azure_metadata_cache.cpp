@@ -599,6 +599,8 @@ protected:
 		TestAzureFileSystem::LoadRemoteFileInfo(handle);
 		if (after_properties) {
 			auto callback = std::move(after_properties);
+			// A moved-from std::function can remain callable, including with libc++ inline targets.
+			after_properties = nullptr;
 			callback();
 		}
 	}
