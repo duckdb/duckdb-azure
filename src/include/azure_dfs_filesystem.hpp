@@ -28,7 +28,8 @@ class AzureDfsStorageFileSystem;
 class AzureDfsStorageFileHandle : public AzureFileHandle {
 public:
 	AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-	                          const AzureOptions &options, Azure::Storage::Files::DataLake::DataLakeFileClient client);
+	                          const AzureOptions &options, AzureMetadataCacheHandle metadata_cache,
+	                          Azure::Storage::Files::DataLake::DataLakeFileClient client);
 	~AzureDfsStorageFileHandle() override = default;
 
 	void StageWriteBuffer();
@@ -48,6 +49,8 @@ public:
 
 class AzureDfsStorageFileSystem : public AzureStorageFileSystem {
 public:
+	explicit AzureDfsStorageFileSystem(shared_ptr<AzureMetadataCache> metadata_cache);
+
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool ListFilesExtended(const string &path_in, const std::function<void(OpenFileInfo &info)> &callback,
 	                       optional_ptr<FileOpener> opener) override;

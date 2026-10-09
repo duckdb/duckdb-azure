@@ -106,6 +106,11 @@ visible until committed which occurs during a sync or close call. Thus large
 uploads may not be visible to standard Azure tooling until whole file has been
 written.
 
+The Blob writer (`az://` or `azure://`) uses block-list uploads, which cannot
+overwrite files created or overwritten through DFS (`abfs://` or `abfss://`).
+Use DFS for subsequent writes to those files to avoid `BlobOperationNotSupported`.
+They remain readable through either endpoint, including on OneLake.
+
 ### File size limit
 
 Azure [hard-limits a blob to **50,000
@@ -126,6 +131,31 @@ The block size can be any positive value up to 4,000 MiB (Azure's per-request li
 |---|---|---|
 | `azure_write_block_size` | `8MiB` | Size of each block for Blob/DFS writes. `0` restores the default. Max 4,000 MiB. Increase to raise the file size ceiling. |
 | `azure_write_staged_blocks_per_commit` | `0` | Blocks staged before an intermediate commit. `0` disables intermediate commits; partial writes are not visible until the file is closed. |
+
+## Metadata caching
+
+Azure file metadata is reused within a query by default. Set
+`enable_http_metadata_cache = true` to also reuse it across queries and
+connections in the same database. Blob and DFS share this cache, keyed by the
+resolved object location rather than the spelling of its DuckDB URI.
+Directory probes with a trailing slash bypass metadata caching to preserve
+their directory hint.
+Metadata supplied by callers or listings is used for that handle only; it does
+not populate the cache because its freshness cannot be verified.
+
+Cache keys have separate account/OneLake authority, full path (including the
+container or OneLake workspace), snapshot, and version fields. Blob and DFS
+spellings of an authority share an identity, including OneLake global, regional,
+and workspace-private endpoints. Different authorities and object paths remain
+isolated; authentication query parameters are not part of the key.
+
+Shared caching requires an account resolved from the URI or a matching secret.
+Legacy settings without a resolved account fall back to query-local caching.
+Writes invalidate both caches at open, after remote creation or truncation,
+at sync, and at close, including when the writer has shared caching disabled.
+Deletes and directory creation also invalidate cached metadata. Mutation errors
+and missing-object delete probes evict entries as well, so uncertain responses
+do not preserve stale metadata. Changes made outside this extension are not tracked.
 
 ## Supported architectures
 

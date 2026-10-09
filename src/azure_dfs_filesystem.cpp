@@ -73,6 +73,7 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 					OpenFileInfo info(elt.Name);
 					info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 					auto &options = info.extended_info->options;
+					options.emplace("type", Value("file"));
 					options.emplace("file_size", Value::BIGINT(elt.FileSize));
 					options.emplace("last_modified",
 					                Value::TIMESTAMP(AzureStorageFileSystem::ToTimestamp(elt.LastModified)));
@@ -107,8 +108,10 @@ AzureDfsContextState::GetDfsFileSystemClient(const std::string &file_system_name
 //////// AzureDfsContextState ////////
 AzureDfsStorageFileHandle::AzureDfsStorageFileHandle(AzureDfsStorageFileSystem &fs, const OpenFileInfo &info,
                                                      FileOpenFlags flags, const AzureOptions &options,
+                                                     AzureMetadataCacheHandle metadata_cache,
                                                      Azure::Storage::Files::DataLake::DataLakeFileClient client)
-    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, options), file_client(std::move(client)) {
+    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, options, std::move(metadata_cache)),
+      file_client(std::move(client)) {
 }
 
 void AzureDfsStorageFileHandle::StageWriteBuffer() {
@@ -126,6 +129,7 @@ void AzureDfsStorageFileHandle::Sync(bool close) {
 	if (!(flags.OpenForWriting() || flags.OpenForAppending())) {
 		return;
 	}
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		StageWriteBuffer();
 		if (staged_block_count == 0 && !close) {
@@ -144,10 +148,15 @@ void AzureDfsStorageFileHandle::Sync(bool close) {
 
 void AzureDfsStorageFileHandle::Close() {
 	Sync(true);
+	InvalidateMetadata();
 	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureDfsStorageFileSystem ////////
+AzureDfsStorageFileSystem::AzureDfsStorageFileSystem(shared_ptr<AzureMetadataCache> metadata_cache)
+    : AzureStorageFileSystem(std::move(metadata_cache)) {
+}
+
 unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
 	if (!opener) {
@@ -174,8 +183,13 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 		file_path.pop_back();
 	}
 
+	auto file_client = file_system_client.GetFileClient(file_path);
+	auto metadata_cache = GetMetadataCache(opener, info.path, parsed_url, file_client.GetUrl());
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		metadata_cache.Invalidate();
+	}
 	auto handle = make_uniq<AzureDfsStorageFileHandle>(*this, info, flags, storage_context->options,
-	                                                   file_system_client.GetFileClient(file_path));
+	                                                   std::move(metadata_cache), std::move(file_client));
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -198,7 +212,10 @@ void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_
 	auto dir_url = ParseUrl(dirname);
 	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(dir_url.container);
-	file_system_client.GetDirectoryClient(dir_url.path).Create();
+	auto dir_client = file_system_client.GetDirectoryClient(dir_url.path);
+	auto metadata_cache = GetMetadataCache(opener, dirname, dir_url, dir_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
+	dir_client.Create();
 }
 
 bool AzureDfsStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
@@ -211,6 +228,8 @@ void AzureDfsStorageFileSystem::RemoveFile(const string &filename, optional_ptr<
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
 	auto file_client = file_system_client.GetFileClient(url.path);
+	auto metadata_cache = GetMetadataCache(opener, filename, url, file_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		file_client.Delete();
 	} catch (Azure::Storage::StorageException &e) {
@@ -224,6 +243,8 @@ bool AzureDfsStorageFileSystem::TryRemoveFile(const string &filename, optional_p
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
 	auto file_client = file_system_client.GetFileClient(url.path);
+	auto metadata_cache = GetMetadataCache(opener, filename, url, file_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	return file_client.DeleteIfExists().Value.Deleted;
 }
 
@@ -333,15 +354,12 @@ void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	// - doesn't exist, don't create
 
 	auto set_props = [&](bool is_dir, idx_t length, timestamp_t last_mod, const string &etag) {
-		afh.is_remote_loaded = true; // always set loaded
-		afh.file_type = is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR;
-		afh.length = is_dir ? 0 : length;
-		afh.last_modified = last_mod;
-		afh.etag = StripETagQuotes(etag);
-		afh.file_offset = 0; // always reset offset state
+		afh.SetFileInfo(is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR, length, last_mod,
+		                StripETagQuotes(etag));
 	};
 
 	auto create_file = [&]() {
+		AzureMetadataCacheInvalidationGuard invalidation(afh.metadata_cache);
 		auto res_create = afh.file_client.Create();
 		set_props(false, 0, ToTimestamp(res_create.Value.LastModified), res_create.Value.ETag.ToString());
 	};
