@@ -39,7 +39,8 @@ AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo 
       // Read info
       buffer_available(0), buffer_idx(0), file_offset(0), buffer_start(0), buffer_end(0),
       // Options
-      options(options), metadata_cache(std::move(metadata_cache_p)) {
+      options(options), metadata_cache(std::move(metadata_cache_p)),
+      metadata_cache_generation(metadata_cache.cache ? metadata_cache.cache->GetGeneration() : 0) {
 	if (!flags.RequireParallelAccess() && !flags.DirectIO()) {
 		read_buffer = duckdb::unique_ptr<data_t[]>(new data_t[options.read_buffer_size]);
 	}
@@ -58,7 +59,7 @@ AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo 
 	}
 	if (type_entry != opts.end() && StringValue::Get(type_entry->second) == "directory") {
 		SetFileInfo(FileType::FILE_TYPE_DIR, 0, modified_entry->second.GetValue<timestamp_t>(), "");
-	} else if (size_entry != opts.end() && etag_entry != opts.end()) {
+	} else if (size_entry != opts.end() && etag_entry != opts.end() && !StringUtil::EndsWith(info.path, "/")) {
 		SetFileInfo(FileType::FILE_TYPE_REGULAR, size_entry->second.GetValue<uint64_t>(),
 		            modified_entry->second.GetValue<timestamp_t>(), StringValue::Get(etag_entry->second));
 	}
@@ -85,8 +86,9 @@ void AzureFileHandle::InvalidateMetadata() {
 }
 
 static bool CanUseMetadataCache(const AzureFileHandle &handle) {
+	// DFS strips trailing slashes from the resource name, but the handle still treats them as directory hints.
 	return handle.metadata_cache.cache && !handle.flags.OpenForWriting() && !handle.flags.OpenForAppending() &&
-	       !handle.flags.ExclusiveCreate();
+	       !handle.flags.ExclusiveCreate() && !StringUtil::EndsWith(handle.GetPath(), "/");
 }
 
 static AzureFileInfo GetCacheEntry(const AzureFileHandle &handle) {
@@ -208,7 +210,8 @@ bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 			}
 		}
 		if (CanUseMetadataCache(handle) && !cache_hit) {
-			handle.metadata_cache.cache->Insert(handle.metadata_cache.key, GetCacheEntry(handle));
+			handle.metadata_cache.cache->Insert(handle.metadata_cache.key, GetCacheEntry(handle),
+			                                    handle.metadata_cache_generation);
 		}
 		return !handle.flags.ReturnNullIfExists();
 	} catch (const Azure::Storage::StorageException &e) {

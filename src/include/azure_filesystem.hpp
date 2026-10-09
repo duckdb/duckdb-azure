@@ -61,13 +61,21 @@ public:
 	explicit AzureMetadataCache(bool flush_on_query_end_p) : flush_on_query_end(flush_on_query_end_p) {
 	}
 
-	void Insert(const AzureMetadataCacheKey &key, const AzureFileInfo &val) {
+	uint64_t GetGeneration() {
 		lock_guard<mutex> parallel_lock(lock);
-		map[key] = val;
+		return generation;
+	}
+
+	void Insert(const AzureMetadataCacheKey &key, const AzureFileInfo &val, uint64_t expected_generation) {
+		lock_guard<mutex> parallel_lock(lock);
+		if (generation == expected_generation) {
+			map[key] = val;
+		}
 	}
 
 	void Erase(const AzureMetadataCacheKey &key) {
 		lock_guard<mutex> parallel_lock(lock);
+		generation++;
 		map.erase(key);
 	}
 
@@ -83,6 +91,7 @@ public:
 
 	void Clear() {
 		lock_guard<mutex> parallel_lock(lock);
+		generation++;
 		map.clear();
 	}
 
@@ -96,6 +105,8 @@ private:
 	// Query-local caches are still shared across parallel tasks within a query.
 	mutex lock;
 	unordered_map<AzureMetadataCacheKey, AzureFileInfo, AzureMetadataCacheKeyHash> map;
+	// Any invalidation also rejects metadata loads already in flight.
+	uint64_t generation = 0;
 	bool flush_on_query_end;
 };
 
@@ -180,6 +191,7 @@ public:
 	idx_t buffer_end;
 	const AzureOptions options;
 	AzureMetadataCacheHandle metadata_cache;
+	uint64_t metadata_cache_generation;
 };
 
 class AzureStorageFileSystem : public FileSystem {

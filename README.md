@@ -138,6 +138,8 @@ Azure file metadata is reused within a query by default. Set
 `enable_http_metadata_cache = true` to also reuse it across queries and
 connections in the same database. Blob and DFS share this cache, keyed by the
 resolved object location rather than the spelling of its DuckDB URI.
+Directory probes with a trailing slash bypass metadata caching to preserve
+their directory hint.
 
 Cache keys have separate account/OneLake authority, full path (including the
 container or OneLake workspace), snapshot, and version fields. Blob and DFS
