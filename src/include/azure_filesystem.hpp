@@ -36,13 +36,14 @@ struct AzureFileInfo {
 };
 
 struct AzureMetadataCacheKey {
-	string account_or_onelake;
+	// Canonical endpoint identity shared by known Azure/OneLake Blob and DFS aliases.
+	string endpoint_identity;
 	string path;
 	string snapshot;
 	string version;
 
 	bool operator==(const AzureMetadataCacheKey &other) const {
-		return account_or_onelake == other.account_or_onelake && path == other.path && snapshot == other.snapshot &&
+		return endpoint_identity == other.endpoint_identity && path == other.path && snapshot == other.snapshot &&
 		       version == other.version;
 	}
 

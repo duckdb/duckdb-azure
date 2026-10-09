@@ -205,7 +205,7 @@ TEST_CASE("Azure metadata keys identify resolved objects across both filesystems
 	const string dfs_url = "https://account.dfs.core.windows.net/container/dir/file";
 	auto blob = GetCache(blob_fs, context.opener, "az://container/dir/file", blob_url);
 	REQUIRE(blob.cache == global_cache);
-	CHECK(blob.key.account_or_onelake == "account.core.windows.net");
+	CHECK(blob.key.endpoint_identity == "account.core.windows.net");
 	CHECK(blob.key.path == "container/dir/file");
 	CHECK(blob.key.snapshot.empty());
 	CHECK(blob.key.version.empty());
@@ -291,7 +291,7 @@ TEST_CASE("OneLake Blob and DFS URLs share structured workspace and item identit
 	auto client = service.GetFileSystemClient(workspace).GetFileClient(item_path);
 	auto cache = GetCache(dfs_fs, context.opener, path, client.GetUrl());
 	REQUIRE(cache.cache == global_cache);
-	CHECK(cache.key.account_or_onelake == "onelake.fabric.microsoft.com");
+	CHECK(cache.key.endpoint_identity == "onelake.fabric.microsoft.com");
 	CHECK(cache.key.path == workspace + "/" + item_path);
 	CHECK(cache.key.snapshot.empty());
 	CHECK(cache.key.version.empty());
@@ -336,7 +336,7 @@ TEST_CASE("OneLake Blob and DFS URLs share structured workspace and item identit
 	auto other_cache =
 	    GetCache(dfs_fs, context.opener, "abfss://other-workspace@onelake.dfs.fabric.microsoft.com/" + item_path,
 	             other.GetUrl());
-	CHECK(other_cache.key.account_or_onelake == cache.key.account_or_onelake);
+	CHECK(other_cache.key.endpoint_identity == cache.key.endpoint_identity);
 	CHECK(other_cache.key != cache.key);
 	CHECK(other_cache.key.path == "other-workspace/" + item_path);
 	auto named = service.GetFileSystemClient("Workspace").GetFileClient("Lakehouse.Lakehouse/Files/file name.parquet");
@@ -371,7 +371,7 @@ TEST_CASE("OneLake regional and private endpoints canonicalize Blob and DFS serv
 		auto dfs = GetCache(dfs_fs, context.opener, dfs_path, "https://" + dfs_host + "/" + object_path);
 		auto blob = GetCache(blob_fs, context.opener, blob_path, "https://" + blob_host + "/" + object_path);
 		CHECK(dfs.key == blob.key);
-		CHECK(dfs.key.account_or_onelake == string(authority) + ".fabric.microsoft.com");
+		CHECK(dfs.key.endpoint_identity == string(authority) + ".fabric.microsoft.com");
 		CHECK(dfs.key.path == object_path);
 		auto azure_account = GetCache(blob_fs, context.opener, "az://onelake.blob.core.windows.net/" + object_path,
 		                              "https://onelake.blob.core.windows.net/" + object_path);
@@ -391,7 +391,7 @@ TEST_CASE("OneLake keys keep optional selectors independent of paths and credent
 	auto second =
 	    GetCache(dfs_fs, context.opener, path, url + "?sig=second&versionid=v%2B1&snapshot=2026-10-07T12:00:00Z");
 	CHECK(first.key == second.key);
-	CHECK(first.key.account_or_onelake == "onelake.fabric.microsoft.com");
+	CHECK(first.key.endpoint_identity == "onelake.fabric.microsoft.com");
 	CHECK(first.key.path == "workspace/Lakehouse.Lakehouse/Files/file");
 	CHECK(first.key.snapshot == "2026-10-07T12:00:00Z");
 	CHECK(first.key.version == "v+1");

@@ -113,14 +113,15 @@ AzureStorageFileSystem::AzureStorageFileSystem(shared_ptr<AzureMetadataCache> gl
 }
 
 uint64_t AzureMetadataCacheKeyHash::operator()(const AzureMetadataCacheKey &key) const {
-	auto hash = Hash(key.account_or_onelake.data(), key.account_or_onelake.size());
+	auto hash = Hash(key.endpoint_identity.data(), key.endpoint_identity.size());
 	hash = CombineHash(Hash(hash), Hash(key.path.data(), key.path.size()));
 	hash = CombineHash(Hash(hash), Hash(key.snapshot.data(), key.snapshot.size()));
 	return CombineHash(Hash(hash), Hash(key.version.data(), key.version.size()));
 }
 
-static AzureMetadataCacheKey GetMetadataCacheKey(const string &resolved_url) {
-	Azure::Core::Url url(resolved_url);
+// Use the SDK's resolved endpoint, which includes connection-string overrides. Only known Azure/OneLake
+// Blob and DFS endpoints share an identity; retain the rest of the host to distinguish endpoint namespaces.
+static string GetMetadataCacheEndpointIdentity(const Azure::Core::Url &url) {
 	auto host = StringUtil::Lower(url.GetHost());
 	const bool storage_endpoint =
 	    StringUtil::EndsWith(host, ".core.windows.net") || StringUtil::EndsWith(host, ".core.chinacloudapi.cn") ||
@@ -140,16 +141,23 @@ static AzureMetadataCacheKey GetMetadataCacheKey(const string &resolved_url) {
 	}
 	auto port = url.GetPort();
 	if (!storage_endpoint) {
+		// Custom endpoints can serve different storage at different schemes or ports (e.g. Azurite instances).
 		auto scheme = StringUtil::Lower(url.GetScheme());
 		if (port == 0) {
 			port = scheme == "https" ? 443 : 80;
 		}
 		host = scheme + "://" + host + ":" + to_string(port);
 	} else if (port != 0 && port != 80 && port != 443) {
+		// Standard Azure ports are aliases, but a nonstandard port still identifies a distinct endpoint.
 		host += ":" + to_string(port);
 	}
+	return host;
+}
+
+static AzureMetadataCacheKey GetMetadataCacheKey(const string &resolved_url) {
+	Azure::Core::Url url(resolved_url);
 	AzureMetadataCacheKey key;
-	key.account_or_onelake = std::move(host);
+	key.endpoint_identity = GetMetadataCacheEndpointIdentity(url);
 	key.path = Azure::Core::Url::Decode(url.GetPath());
 	auto query = url.GetQueryParameters();
 	auto snapshot = query.find("snapshot");
