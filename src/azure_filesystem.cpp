@@ -190,11 +190,6 @@ AzureMetadataCacheHandle AzureStorageFileSystem::GetMetadataCache(optional_ptr<F
 	return {std::move(cache), global_metadata_cache, GetMetadataCacheKey(resolved_url)};
 }
 
-void AzureStorageFileSystem::InvalidateMetadata(optional_ptr<FileOpener> opener, const string &path,
-                                                const AzureParsedUrl &parsed_url, const string &resolved_url) {
-	GetMetadataCache(opener, path, parsed_url, resolved_url).Invalidate();
-}
-
 bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 	try {
 		// Caller metadata can predate an invalidation, or describe a synthetic directory. Keep it on this handle.

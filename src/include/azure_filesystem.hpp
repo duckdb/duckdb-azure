@@ -125,6 +125,19 @@ struct AzureMetadataCacheHandle {
 	}
 };
 
+// A failed response cannot prove that the remote mutation was not applied.
+class AzureMetadataCacheInvalidationGuard {
+public:
+	explicit AzureMetadataCacheInvalidationGuard(const AzureMetadataCacheHandle &cache_p) : cache(cache_p) {
+	}
+	~AzureMetadataCacheInvalidationGuard() {
+		cache.Invalidate();
+	}
+
+private:
+	const AzureMetadataCacheHandle &cache;
+};
+
 class AzureContextState : public ClientContextState {
 public:
 	const AzureOptions options;
@@ -248,8 +261,6 @@ protected:
 	static bool ParseAzureMetadataCacheEnabled(optional_ptr<FileOpener> opener);
 	AzureMetadataCacheHandle GetMetadataCache(optional_ptr<FileOpener> opener, const string &path,
 	                                          const AzureParsedUrl &parsed_url, const string &resolved_url);
-	void InvalidateMetadata(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed_url,
-	                        const string &resolved_url);
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);

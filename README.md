@@ -153,8 +153,9 @@ Shared caching requires an account resolved from the URI or a matching secret.
 Legacy settings without a resolved account fall back to query-local caching.
 Writes invalidate both caches at open, after remote creation or truncation,
 at sync, and at close, including when the writer has shared caching disabled.
-Deletes and directory creation also
-invalidate cached metadata. Changes made outside this extension are not tracked.
+Deletes and directory creation also invalidate cached metadata. Mutation errors
+and missing-object delete probes evict entries as well, so uncertain responses
+do not preserve stale metadata. Changes made outside this extension are not tracked.
 
 ## Supported architectures
 

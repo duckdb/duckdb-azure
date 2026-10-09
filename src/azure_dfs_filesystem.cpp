@@ -129,6 +129,7 @@ void AzureDfsStorageFileHandle::Sync(bool close) {
 	if (!(flags.OpenForWriting() || flags.OpenForAppending())) {
 		return;
 	}
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		StageWriteBuffer();
 		if (staged_block_count == 0 && !close) {
@@ -139,7 +140,6 @@ void AzureDfsStorageFileHandle::Sync(bool close) {
 		file_client.Flush(staged_offset, flush_opts);
 		committed_block_count += staged_block_count;
 		staged_block_count = 0;
-		InvalidateMetadata();
 	} catch (const Azure::Storage::StorageException &e) {
 		throw IOException("AzureDfsStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -213,8 +213,9 @@ void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_
 	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(dir_url.container);
 	auto dir_client = file_system_client.GetDirectoryClient(dir_url.path);
+	auto metadata_cache = GetMetadataCache(opener, dirname, dir_url, dir_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	dir_client.Create();
-	InvalidateMetadata(opener, dirname, dir_url, dir_client.GetUrl());
 }
 
 bool AzureDfsStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
@@ -227,9 +228,10 @@ void AzureDfsStorageFileSystem::RemoveFile(const string &filename, optional_ptr<
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
 	auto file_client = file_system_client.GetFileClient(url.path);
+	auto metadata_cache = GetMetadataCache(opener, filename, url, file_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		file_client.Delete();
-		InvalidateMetadata(opener, filename, url, file_client.GetUrl());
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureDfsStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -241,11 +243,9 @@ bool AzureDfsStorageFileSystem::TryRemoveFile(const string &filename, optional_p
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
 	auto file_client = file_system_client.GetFileClient(url.path);
-	auto removed = file_client.DeleteIfExists().Value.Deleted;
-	if (removed) {
-		InvalidateMetadata(opener, filename, url, file_client.GetUrl());
-	}
-	return removed;
+	auto metadata_cache = GetMetadataCache(opener, filename, url, file_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
+	return file_client.DeleteIfExists().Value.Deleted;
 }
 
 vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpener *opener) {
@@ -359,9 +359,9 @@ void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	};
 
 	auto create_file = [&]() {
+		AzureMetadataCacheInvalidationGuard invalidation(afh.metadata_cache);
 		auto res_create = afh.file_client.Create();
 		set_props(false, 0, ToTimestamp(res_create.Value.LastModified), res_create.Value.ETag.ToString());
-		afh.InvalidateMetadata();
 	};
 	auto truncate_file = create_file;
 

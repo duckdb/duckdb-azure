@@ -744,6 +744,7 @@ protected:
 	                                                   const AzureParsedUrl &) override {
 		Azure::Storage::Files::DataLake::DataLakeClientOptions options;
 		options.Transport.Transport = transport;
+		options.Retry.MaxRetries = 0;
 		Azure::Storage::Files::DataLake::DataLakeServiceClient service("https://account.dfs.core.windows.net", options);
 		return make_shared_ptr<AzureDfsContextState>(service, TestOptions());
 	}
@@ -836,6 +837,7 @@ protected:
 	                                                   const AzureParsedUrl &) override {
 		Azure::Storage::Blobs::BlobClientOptions options;
 		options.Transport.Transport = transport;
+		options.Retry.MaxRetries = 0;
 		Azure::Storage::Blobs::BlobServiceClient service("https://account.blob.core.windows.net", options);
 		return make_shared_ptr<AzureBlobContextState>(service, TestOptions());
 	}
@@ -877,6 +879,7 @@ public:
 	idx_t deletes = 0;
 	bool exists = true;
 	bool directory = false;
+	bool fail_after_mutation = false;
 	std::function<void()> during_head;
 	vector<string> listing_names {"file"};
 
@@ -887,6 +890,7 @@ public:
 		const auto query = request.GetUrl().GetQueryParameters();
 		auto status = HttpStatusCode::Ok;
 		const auto response_length = length;
+		bool applied_mutation = false;
 		if (request.GetMethod() == HttpMethod::Head) {
 			heads++;
 			if (!exists) {
@@ -918,6 +922,7 @@ public:
 			exists = true;
 			directory = query.at("resource") == "directory";
 			length = 0;
+			applied_mutation = true;
 		} else if (request.GetMethod() == HttpMethod::Put && query.count("comp")) {
 			status = HttpStatusCode::Created;
 			if (query.at("comp") == "block") {
@@ -925,6 +930,7 @@ public:
 			} else if (query.at("comp") == "blocklist") {
 				exists = true;
 				length = staged_length;
+				applied_mutation = true;
 			} else {
 				throw InternalException("Unexpected Blob mutation in metadata test");
 			}
@@ -933,15 +939,20 @@ public:
 				status = HttpStatusCode::Accepted;
 			} else if (query.at("action") == "flush") {
 				length = std::stoull(query.at("position"));
+				applied_mutation = true;
 			} else {
 				throw InternalException("Unexpected DFS mutation in metadata test");
 			}
 		} else if (request.GetMethod() == HttpMethod::Delete) {
 			status = exists ? HttpStatusCode::Accepted : HttpStatusCode::NotFound;
 			deletes += exists ? 1 : 0;
+			applied_mutation = exists;
 			exists = false;
 		} else {
 			throw InternalException("Unexpected request in metadata mutation test");
+		}
+		if (applied_mutation && fail_after_mutation) {
+			status = HttpStatusCode::InternalServerError;
 		}
 		auto response = std::make_unique<Azure::Core::Http::RawResponse>(1, 1, status, "OK");
 		response->SetHeader("content-length",
@@ -962,6 +973,8 @@ public:
 			response->SetHeader("x-ms-error-code", request.GetUrl().GetHost().find(".dfs.") != string::npos
 			                                           ? "PathNotFound"
 			                                           : "BlobNotFound");
+		} else if (status == HttpStatusCode::InternalServerError) {
+			response->SetHeader("x-ms-error-code", "InternalError");
 		}
 		if (request.GetMethod() == HttpMethod::Get) {
 			response->SetHeader("content-type", "application/xml");
@@ -1206,6 +1219,119 @@ TEST_CASE("Azure directory creation invalidates local and shared object metadata
 			CHECK(!dfs_fs.FileExists(path, &context.opener));
 			CHECK(blob_fs.Glob("az://container/dir", &context.opener).empty());
 			CHECK(transport->heads == 1);
+		});
+	}
+}
+
+TEST_CASE("Azure ambiguous mutation failures do not leave stale metadata cached", "[azure_metadata_cache]") {
+	for (bool shared_cache : {false, true}) {
+		for (bool dfs : {false, true}) {
+			for (const string operation : {"sync", "truncate", "delete", "directory"}) {
+				if (operation == "directory" && !dfs) {
+					continue;
+				}
+				INFO("shared cache: " << shared_cache << ", DFS: " << dfs << ", operation: " << operation);
+				CacheTestContext context;
+				Execute(context.con, "CREATE SECRET s1 (TYPE AZURE, ACCOUNT_NAME 'account')");
+				Execute(context.con, shared_cache ? "SET enable_http_metadata_cache = true"
+				                                  : "SET enable_http_metadata_cache = false");
+				auto global = make_shared_ptr<AzureMetadataCache>(false);
+				auto transport = std::make_shared<MetadataMutationTransport>();
+				MetadataTestBlobFileSystem blob_fs(global, transport);
+				MetadataTestDfsFileSystem dfs_fs(global, transport);
+				AzureStorageFileSystem &fs = dfs ? static_cast<AzureStorageFileSystem &>(dfs_fs) : blob_fs;
+				const string path = dfs ? "abfss://container/file" : "az://container/file";
+				auto cache =
+				    dfs ? GetCache(dfs_fs, context.opener, path, "https://account.dfs.core.windows.net/container/file")
+				        : GetCache(blob_fs, context.opener, path,
+				                   "https://account.blob.core.windows.net/container/file");
+				context.con.context->RunFunctionInTransaction([&]() {
+					unique_ptr<FileHandle> writer;
+					if (operation == "sync") {
+						writer = fs.OpenFile(path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW,
+						                     &context.opener);
+						REQUIRE(writer);
+						vector<data_t> data(200, 'x');
+						fs.Write(*writer, data.data(), data.size());
+					}
+					auto populate = [&]() {
+						auto reader = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ, &context.opener);
+						REQUIRE(reader);
+						AzureFileInfo info;
+						REQUIRE(cache.cache->Find(cache.key, info));
+						global->Insert(cache.key, info, global->GetGeneration());
+					};
+					if (operation == "truncate") {
+						// Repopulate between the initial write-open invalidation and the failed truncate response.
+						transport->during_head = populate;
+					} else {
+						populate();
+					}
+					if (operation == "directory") {
+						// Simulate an externally removed file with its old positive metadata still cached.
+						transport->exists = false;
+					}
+					transport->fail_after_mutation = true;
+					if (operation == "sync") {
+						CHECK_THROWS(fs.FileSync(*writer));
+						CHECK(transport->length == 200);
+					} else if (operation == "truncate") {
+						CHECK_THROWS(fs.OpenFile(path,
+						                         FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW,
+						                         &context.opener));
+						CHECK(transport->length == 0);
+					} else if (operation == "delete") {
+						CHECK_THROWS(fs.RemoveFile(path, &context.opener));
+						CHECK(!transport->exists);
+					} else {
+						CHECK_THROWS(dfs_fs.CreateDirectory(path, &context.opener));
+						CHECK(transport->directory);
+					}
+					AzureFileInfo cached;
+					CHECK(!cache.cache->Find(cache.key, cached));
+					CHECK(!global->Find(cache.key, cached));
+					transport->fail_after_mutation = false;
+					auto next = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS,
+					                        &context.opener);
+					if (operation == "delete") {
+						CHECK(!next);
+					} else {
+						REQUIRE(next);
+						CHECK(fs.GetFileSize(*next) == transport->length);
+						CHECK(next->Cast<AzureFileHandle>().GetType() ==
+						      (transport->directory ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR));
+					}
+				});
+			}
+		}
+	}
+}
+
+TEST_CASE("Azure missing-object delete probes evict cached positive metadata", "[azure_metadata_cache]") {
+	for (bool dfs : {false, true}) {
+		CacheTestContext context;
+		Execute(context.con, "CREATE SECRET s1 (TYPE AZURE, ACCOUNT_NAME 'account')");
+		auto global = make_shared_ptr<AzureMetadataCache>(false);
+		auto transport = std::make_shared<MetadataMutationTransport>();
+		transport->exists = false;
+		MetadataTestBlobFileSystem blob_fs(global, transport);
+		MetadataTestDfsFileSystem dfs_fs(global, transport);
+		AzureStorageFileSystem &fs = dfs ? static_cast<AzureStorageFileSystem &>(dfs_fs) : blob_fs;
+		const string path = dfs ? "abfss://container/file" : "az://container/file";
+		auto cache =
+		    dfs ? GetCache(dfs_fs, context.opener, path, "https://account.dfs.core.windows.net/container/file")
+		        : GetCache(blob_fs, context.opener, path, "https://account.blob.core.windows.net/container/file");
+		AzureFileInfo info;
+		info.file_type = FileType::FILE_TYPE_REGULAR;
+		info.length = 100;
+		cache.cache->Insert(cache.key, info, cache.cache->GetGeneration());
+		global->Insert(cache.key, info, global->GetGeneration());
+		context.con.context->RunFunctionInTransaction([&]() {
+			CHECK(!fs.TryRemoveFile(path, &context.opener));
+			CHECK(!cache.cache->Find(cache.key, info));
+			CHECK(!global->Find(cache.key, info));
+			CHECK(!fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS,
+			                   &context.opener));
 		});
 	}
 }

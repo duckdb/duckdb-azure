@@ -96,6 +96,7 @@ void AzureBlobStorageFileHandle::Sync() {
 	if (!(flags.OpenForWriting() || flags.OpenForAppending())) {
 		return;
 	}
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		StageWriteBuffer();
 		if (staged_block_count == 0) {
@@ -111,7 +112,6 @@ void AzureBlobStorageFileHandle::Sync() {
 		last_modified = AzureBlobStorageFileSystem::ToTimestamp(res.Value.LastModified);
 		committed_block_count += staged_block_count;
 		staged_block_count = 0;
-		InvalidateMetadata();
 	} catch (const Azure::Storage::StorageException &e) {
 		throw IOException("AzureBlobStorageFileSystem FileSync of '%s' failed with %s Reason Phrase: %s", GetPath(),
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -328,9 +328,9 @@ void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	};
 
 	auto create_file = [&]() {
+		AzureMetadataCacheInvalidationGuard invalidation(afh.metadata_cache);
 		auto res_create = afh.blob_client.CommitBlockList({});
 		set_props(false, 0, ToTimestamp(res_create.Value.LastModified), res_create.Value.ETag.ToString());
-		afh.InvalidateMetadata();
 	};
 	auto truncate_file = create_file;
 
@@ -405,9 +405,10 @@ void AzureBlobStorageFileSystem::RemoveFile(const string &filename, optional_ptr
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(url.container);
 	auto blob_client = container.GetBlockBlobClient(url.path);
+	auto metadata_cache = GetMetadataCache(opener, filename, url, blob_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		blob_client.Delete();
-		InvalidateMetadata(opener, filename, url, blob_client.GetUrl());
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureBlobStorageFileSystem Delete of %s failed with %s Reason Phrase: %s", filename,
 		                  e.ErrorCode, e.ReasonPhrase);
@@ -419,11 +420,9 @@ bool AzureBlobStorageFileSystem::TryRemoveFile(const string &filename, optional_
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(url.container);
 	auto blob_client = container.GetBlockBlobClient(url.path);
-	auto removed = blob_client.DeleteIfExists().Value.Deleted;
-	if (removed) {
-		InvalidateMetadata(opener, filename, url, blob_client.GetUrl());
-	}
-	return removed;
+	auto metadata_cache = GetMetadataCache(opener, filename, url, blob_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
+	return blob_client.DeleteIfExists().Value.Deleted;
 }
 
 void AzureBlobStorageFileSystem::ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out,
