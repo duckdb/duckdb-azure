@@ -197,21 +197,20 @@ void AzureStorageFileSystem::InvalidateMetadata(optional_ptr<FileOpener> opener,
 
 bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 	try {
-		bool cache_hit = false;
+		// Caller metadata can predate an invalidation, or describe a synthetic directory. Keep it on this handle.
 		if (!handle.IsRemoteLoaded()) {
 			AzureFileInfo cached_info;
 			if (CanUseMetadataCache(handle) &&
 			    handle.metadata_cache.cache->Find(handle.metadata_cache.key, cached_info)) {
-				cache_hit = true;
 				handle.SetFileInfo(cached_info.file_type, cached_info.length, cached_info.last_modified,
 				                   cached_info.etag);
 			} else {
 				LoadRemoteFileInfo(handle);
+				if (CanUseMetadataCache(handle)) {
+					handle.metadata_cache.cache->Insert(handle.metadata_cache.key, GetCacheEntry(handle),
+					                                    handle.metadata_cache_generation);
+				}
 			}
-		}
-		if (CanUseMetadataCache(handle) && !cache_hit) {
-			handle.metadata_cache.cache->Insert(handle.metadata_cache.key, GetCacheEntry(handle),
-			                                    handle.metadata_cache_generation);
 		}
 		return !handle.flags.ReturnNullIfExists();
 	} catch (const Azure::Storage::StorageException &e) {

@@ -140,6 +140,8 @@ connections in the same database. Blob and DFS share this cache, keyed by the
 resolved object location rather than the spelling of its DuckDB URI.
 Directory probes with a trailing slash bypass metadata caching to preserve
 their directory hint.
+Metadata supplied by callers or listings is used for that handle only; it does
+not populate the cache because its freshness cannot be verified.
 
 Cache keys have separate account/OneLake authority, full path (including the
 container or OneLake workspace), snapshot, and version fields. Blob and DFS
@@ -149,8 +151,9 @@ isolated; authentication query parameters are not part of the key.
 
 Shared caching requires an account resolved from the URI or a matching secret.
 Legacy settings without a resolved account fall back to query-local caching.
-Writes invalidate both caches at open, sync, and close, including when the
-writer has shared caching disabled. Deletes and directory creation also
+Writes invalidate both caches at open, after remote creation or truncation,
+at sync, and at close, including when the writer has shared caching disabled.
+Deletes and directory creation also
 invalidate cached metadata. Changes made outside this extension are not tracked.
 
 ## Supported architectures

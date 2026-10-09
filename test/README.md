@@ -15,9 +15,10 @@ For other client tests check the makefile in the root of this repository.
 
 The `azure_metadata_cache_test` C++ target covers extended open metadata,
 structured cache identity and lifetime, OneLake Blob/DFS workspace/item paths,
-sync and close invalidation, in-flight reads during mutations, and trailing-slash
-directory hints without Azure credentials. It is built with
-`BUILD_UNITTESTS` and runs in the local-test CI jobs:
+create/truncate, sync, close, and delete invalidation, old listings opened after
+writes, synthetic directory names that overlap real blobs, in-flight reads
+during mutations, and trailing-slash directory hints without Azure credentials.
+It is built with `BUILD_UNITTESTS` and runs in the local-test CI jobs:
 
 ```bash
 build/release/test/azure_metadata_cache_test

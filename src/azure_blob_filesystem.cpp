@@ -330,6 +330,7 @@ void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	auto create_file = [&]() {
 		auto res_create = afh.blob_client.CommitBlockList({});
 		set_props(false, 0, ToTimestamp(res_create.Value.LastModified), res_create.Value.ETag.ToString());
+		afh.InvalidateMetadata();
 	};
 	auto truncate_file = create_file;
 
