@@ -7,6 +7,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_context_file_opener.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
@@ -14,6 +15,7 @@
 #include "http_state_policy.hpp"
 #include <unordered_set>
 
+#include <azure/core/credentials/credentials.hpp>
 #include <azure/core/credentials/token_credential_options.hpp>
 #include <azure/core/http/curl_transport.hpp>
 #include <azure/core/resource_identifier.hpp>
@@ -29,6 +31,7 @@
 #include <azure/storage/blobs/blob_service_client.hpp>
 #include <azure/storage/files/datalake/datalake_options.hpp>
 #include <azure/storage/files/datalake/datalake_service_client.hpp>
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -739,6 +742,28 @@ ConnectToDfsStorageAccount(optional_ptr<FileOpener> opener, const std::string &p
 	auto account_url = "https://" + azure_parsed_url.storage_account_name + '.' + azure_parsed_url.endpoint;
 	auto dfs_options = ToDfsClientOptions(transport_options, opener);
 	return Azure::Storage::Files::DataLake::DataLakeServiceClient(account_url, dfs_options);
+}
+
+AzureAccessToken FetchAzureAccessToken(ClientContext &context, const KeyValueSecret &secret,
+                                       const std::string &token_scope) {
+	ClientContextFileOpener opener(context);
+	auto transport_options = GetTransportOptions(&opener, secret);
+	auto credential = CreateChainedTokenCredential(secret, transport_options);
+
+	Azure::Core::Credentials::TokenRequestContext request_context;
+	request_context.Scopes = {token_scope};
+	try {
+		auto access_token = credential->GetToken(request_context, Azure::Core::Context());
+		auto expires_on = static_cast<std::chrono::system_clock::time_point>(access_token.ExpiresOn);
+		AzureAccessToken result;
+		result.token = access_token.Token;
+		result.expiration_epoch_ms =
+		    std::chrono::duration_cast<std::chrono::milliseconds>(expires_on.time_since_epoch()).count();
+		return result;
+	} catch (const Azure::Core::Credentials::AuthenticationException &ex) {
+		throw InvalidConfigurationException("Failed to fetch an Azure access token for scope '%s': %s", token_scope,
+		                                    ex.what());
+	}
 }
 
 } // namespace duckdb
