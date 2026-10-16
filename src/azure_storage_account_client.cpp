@@ -27,10 +27,12 @@
 #include <azure/identity/workload_identity_credential.hpp>
 #include <azure/storage/blobs/blob_options.hpp>
 #include <azure/storage/blobs/blob_service_client.hpp>
+#include <azure/storage/common/storage_credential.hpp>
 #include <azure/storage/files/datalake/datalake_options.hpp>
 #include <azure/storage/files/datalake/datalake_service_client.hpp>
 #include <cstdlib>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -46,14 +48,145 @@ static std::string TryGetCurrentSetting(optional_ptr<FileOpener> opener, const I
 	return "";
 }
 
-static bool ConnectionStringMatchStorageAccountName(const std::string &connection_string,
-                                                    const std::string &provided_storage_account) {
-	auto storage_account_name_pos = connection_string.find("AccountName=");
-	if (storage_account_name_pos == std::string::npos) {
-		throw InvalidInputException("A invalid connection string has been provided.");
+static void ValidateConnectionStringEndpoint(const Azure::Core::Url &url, const char *setting) {
+	if (url.GetHost().empty()) {
+		throw InvalidInputException("Invalid Azure connection string: AccountName or %s is required.", setting);
 	}
-	return 0 == connection_string.compare(storage_account_name_pos + 12, provided_storage_account.size(),
-	                                      provided_storage_account);
+	if ((!StringUtil::CIEquals(url.GetScheme(), "http") && !StringUtil::CIEquals(url.GetScheme(), "https")) ||
+	    url.GetHost().find_first_of(" \t\r\n") != std::string::npos) {
+		throw InvalidInputException("Invalid Azure connection string: %s must be an absolute HTTP(S) URL.", setting);
+	}
+}
+
+static Azure::Storage::_internal::ConnectionStringParts ParseAzureConnectionString(const std::string &connection_string,
+                                                                                   bool is_dfs = false) {
+	std::string normalized;
+	std::string development_proxy;
+	std::unordered_set<std::string> settings;
+	bool use_development_storage = false;
+	bool has_development_proxy = false;
+	bool has_account_name = false;
+	bool has_account_key = false;
+
+	// Normalize setting names and whitespace, leaving credentials and endpoint parsing to the SDK.
+	for (auto setting : StringUtil::Split(connection_string, ';')) {
+		StringUtil::Trim(setting);
+		if (setting.empty()) {
+			continue;
+		}
+		auto equals_pos = setting.find('=');
+		if (equals_pos == std::string::npos) {
+			throw InvalidInputException("Invalid Azure connection string: settings must have the form name=value.");
+		}
+		auto name = setting.substr(0, equals_pos);
+		auto value = setting.substr(equals_pos + 1);
+		StringUtil::Trim(name);
+		StringUtil::Trim(value);
+		if (name.empty()) {
+			throw InvalidInputException("Invalid Azure connection string: setting names cannot be empty.");
+		}
+		if (!settings.insert(StringUtil::Lower(name)).second) {
+			throw InvalidInputException("Invalid Azure connection string: duplicate settings are not allowed.");
+		}
+		for (const auto *known_name :
+		     {"AccountName", "AccountKey", "AccountKeyName", "DefaultEndpointsProtocol", "EndpointSuffix",
+		      "SharedAccessSignature", "BlobEndpoint", "BlobSecondaryEndpoint", "DfsEndpoint", "FileEndpoint",
+		      "FileSecondaryEndpoint", "QueueEndpoint", "QueueSecondaryEndpoint", "TableEndpoint",
+		      "TableSecondaryEndpoint", "UseDevelopmentStorage", "DevelopmentStorageProxyUri"}) {
+			if (StringUtil::CIEquals(name, known_name)) {
+				name = known_name;
+				break;
+			}
+		}
+		if (name == "UseDevelopmentStorage") {
+			if (!StringUtil::CIEquals(value, "true")) {
+				throw InvalidInputException("Invalid Azure connection string: UseDevelopmentStorage must be true.");
+			}
+			use_development_storage = true;
+		} else if (name == "DevelopmentStorageProxyUri") {
+			has_development_proxy = true;
+			development_proxy = value;
+		} else if (name == "AccountName") {
+			has_account_name = !value.empty();
+		} else if (name == "AccountKey") {
+			has_account_key = !value.empty();
+		} else if (name == "DefaultEndpointsProtocol") {
+			value = StringUtil::Lower(value);
+			if (value != "http" && value != "https") {
+				throw InvalidInputException(
+				    "Invalid Azure connection string: DefaultEndpointsProtocol must be http or https.");
+			}
+		}
+		normalized += name + "=" + value + ";";
+	}
+
+	if (has_development_proxy && !use_development_storage) {
+		throw InvalidInputException(
+		    "Invalid Azure connection string: DevelopmentStorageProxyUri requires UseDevelopmentStorage=true.");
+	}
+	if (has_account_key && !has_account_name) {
+		throw InvalidInputException(
+		    "Invalid Azure connection string: AccountName is required when AccountKey is provided.");
+	}
+
+	try {
+		if (use_development_storage) {
+			if (settings.size() != (has_development_proxy ? 2 : 1)) {
+				throw InvalidInputException(
+				    "Invalid Azure connection string: UseDevelopmentStorage cannot be combined with other settings "
+				    "except DevelopmentStorageProxyUri.");
+			}
+			auto url = Azure::Core::Url(has_development_proxy ? development_proxy : "http://127.0.0.1");
+			ValidateConnectionStringEndpoint(url, "DevelopmentStorageProxyUri");
+			url.SetPort(10000);
+			url.SetPath("devstoreaccount1");
+			url.SetQueryParameters({});
+			// The C++ SDK does not expand the documented Azurite shortcut.
+			// This is Azurite's public, well-known test key, not a production credential.
+			normalized =
+			    "AccountName=devstoreaccount1;"
+			    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
+			    "BlobEndpoint=" +
+			    url.GetAbsoluteUrl() + ";DfsEndpoint=" + url.GetAbsoluteUrl() + ";";
+		}
+		auto parsed = Azure::Storage::_internal::ParseConnectionString(normalized);
+		ValidateConnectionStringEndpoint(is_dfs ? parsed.DataLakeServiceUrl : parsed.BlobServiceUrl,
+		                                 is_dfs ? "DfsEndpoint" : "BlobEndpoint");
+		return parsed;
+	} catch (const std::invalid_argument &) {
+		throw InvalidInputException("Invalid Azure connection string: service endpoints must be valid HTTP(S) URLs.");
+	} catch (const std::out_of_range &) {
+		throw InvalidInputException("Invalid Azure connection string: service endpoint port is out of range.");
+	}
+}
+
+static bool ConnectionStringMatchesStorageAccount(const Azure::Storage::_internal::ConnectionStringParts &parsed,
+                                                  const Azure::Core::Url &service_url,
+                                                  const std::string &provided_storage_account,
+                                                  const std::string &provided_endpoint) {
+	if (provided_storage_account.empty()) {
+		return true;
+	}
+	if (!parsed.AccountName.empty()) {
+		return StringUtil::CIEquals(parsed.AccountName, provided_storage_account);
+	}
+	// SAS and anonymous connection strings can identify the account solely by their service endpoint.
+	auto provided_url = Azure::Core::Url("https://" + provided_storage_account + "." + provided_endpoint);
+	auto service_port = service_url.GetPort();
+	if (service_port == 0) {
+		service_port = StringUtil::CIEquals(service_url.GetScheme(), "http") ? 80 : 443;
+	}
+	return StringUtil::CIEquals(service_url.GetHost(), provided_url.GetHost()) &&
+	       (provided_url.GetPort() == 0 || provided_url.GetPort() == service_port);
+}
+
+template <typename CLIENT, typename OPTIONS>
+static CLIENT CreateClientFromConnectionString(const Azure::Storage::_internal::ConnectionStringParts &parsed,
+                                               const Azure::Core::Url &service_url, const OPTIONS &options) {
+	if (parsed.KeyCredential) {
+		return CLIENT(service_url.GetAbsoluteUrl(), parsed.KeyCredential, options);
+	}
+	return CLIENT(service_url.GetAbsoluteUrl(), options);
 }
 
 static std::string AccountUrl(const std::string &storage_account, const std::string &endpoint) {
@@ -412,18 +545,20 @@ GetBlobStorageAccountClientFromConfigProvider(optional_ptr<FileOpener> opener, c
                                               const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
 
-	// If connection string, we're done heres
+	// A connection string provides its own endpoint and credentials.
 	auto connection_string_val = secret.TryGetValue("connection_string");
 	if (!connection_string_val.IsNull()) {
-		auto connection_string = connection_string_val.ToString();
+		auto parsed = ParseAzureConnectionString(connection_string_val.ToString());
 		if (azure_parsed_url.is_fully_qualified &&
-		    !ConnectionStringMatchStorageAccountName(connection_string, azure_parsed_url.storage_account_name)) {
+		    !ConnectionStringMatchesStorageAccount(parsed, parsed.BlobServiceUrl, azure_parsed_url.storage_account_name,
+		                                           azure_parsed_url.endpoint)) {
 			throw InvalidInputException("The provided connection string does not match the storage account named %s",
 			                            azure_parsed_url.storage_account_name);
 		}
 
 		auto blob_options = ToBlobClientOptions(transport_options, opener);
-		return Azure::Storage::Blobs::BlobServiceClient::CreateFromConnectionString(connection_string, blob_options);
+		return CreateClientFromConnectionString<Azure::Storage::Blobs::BlobServiceClient>(parsed, parsed.BlobServiceUrl,
+		                                                                                  blob_options);
 	}
 
 	// Default provider (config) with no connection string => public storage account
@@ -438,19 +573,20 @@ GetDfsStorageAccountClientFromConfigProvider(optional_ptr<FileOpener> opener, co
                                              const AzureParsedUrl &azure_parsed_url) {
 	auto transport_options = GetTransportOptions(opener, secret);
 
-	// If connection string, we're done heres
+	// A connection string provides its own endpoint and credentials.
 	auto connection_string_val = secret.TryGetValue("connection_string");
 	if (!connection_string_val.IsNull()) {
-		auto connection_string = connection_string_val.ToString();
+		auto parsed = ParseAzureConnectionString(connection_string_val.ToString(), true);
 		if (azure_parsed_url.is_fully_qualified &&
-		    !ConnectionStringMatchStorageAccountName(connection_string, azure_parsed_url.storage_account_name)) {
+		    !ConnectionStringMatchesStorageAccount(parsed, parsed.DataLakeServiceUrl,
+		                                           azure_parsed_url.storage_account_name, azure_parsed_url.endpoint)) {
 			throw InvalidInputException("The provided connection string does not match the storage account named %s",
 			                            azure_parsed_url.storage_account_name);
 		}
 
 		auto dfs_options = ToDfsClientOptions(transport_options, opener);
-		return Azure::Storage::Files::DataLake::DataLakeServiceClient::CreateFromConnectionString(connection_string,
-		                                                                                          dfs_options);
+		return CreateClientFromConnectionString<Azure::Storage::Files::DataLake::DataLakeServiceClient>(
+		    parsed, parsed.DataLakeServiceUrl, dfs_options);
 	}
 
 	// Default provider (config) with no connection string => public storage account
@@ -656,9 +792,13 @@ static Azure::Storage::Blobs::BlobServiceClient GetBlobStorageAccountClient(opti
 	auto blob_options = ToBlobClientOptions(transport_options, opener);
 
 	auto connection_string = TryGetCurrentSetting(opener, "azure_storage_connection_string");
-	if (!connection_string.empty() &&
-	    ConnectionStringMatchStorageAccountName(connection_string, provided_storage_account)) {
-		return Azure::Storage::Blobs::BlobServiceClient::CreateFromConnectionString(connection_string, blob_options);
+	if (!connection_string.empty()) {
+		auto parsed = ParseAzureConnectionString(connection_string);
+		if (ConnectionStringMatchesStorageAccount(parsed, parsed.BlobServiceUrl, provided_storage_account,
+		                                          provided_endpoint)) {
+			return CreateClientFromConnectionString<Azure::Storage::Blobs::BlobServiceClient>(
+			    parsed, parsed.BlobServiceUrl, blob_options);
+		}
 	}
 
 	std::string endpoint;

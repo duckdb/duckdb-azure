@@ -25,6 +25,8 @@ jobs:
       GEN: ninja
       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:28000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:28001/devstoreaccount1;TableEndpoint=http://127.0.0.1:28002/devstoreaccount1;"
       HTTP_PROXY_RUNNING: "1"
+      AZURITE_SHORTCUT_PROXY: "http://127.0.0.1:3128"
+      DUCKDB_TEST_ENV_PASSTHROUGH: "AZURITE_SHORTCUT_PROXY"
       # AZ protocol vars
       AZ_STORAGE_ACCOUNT: devstoreaccount1
       AZ_DATA_DIR: testing-private
@@ -47,7 +49,9 @@ jobs:
       - name: Launch & populate Azure test service
         run: |
           azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
-          sudo ./scripts/run_squid.sh --port 3128 --log_dir squid_logs &
+          # Forward the shortcut's fixed port through Squid; leave the runner's port 10000 listener alone.
+          echo "Default-port shortcut traffic is forwarded to Azurite through Squid." > azurite_default_log.txt
+          sudo ./scripts/run_squid.sh --port 3128 --log_dir squid_logs --development-storage &
           sudo ./scripts/run_squid.sh --port 3129 --log_dir squid_auth_logs --auth &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
@@ -75,7 +79,11 @@ jobs:
           make release
 
       - name: Test extension
+        env:
+          HTTP_PROXY: "http://127.0.0.1:3128"
+          NO_PROXY: ""
         run: |
+          unset no_proxy
           scripts/env_azurite make test
 
       - name: Run test data integrity check
@@ -89,6 +97,9 @@ jobs:
         run: |
           echo "## azurite"
           cat azurite_log.txt
+
+          echo "## default-port azurite"
+          cat azurite_default_log.txt
 
           echo "## squid"
           sudo cat squid_logs/*
@@ -125,6 +136,7 @@ jobs:
         run: |
           npm install -g azurite
           azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --location "$RUNNER_TEMP/azurite-default" > azurite_default_log.txt 2>&1 &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
 
@@ -161,6 +173,9 @@ jobs:
           echo "## azurite"
           cat azurite_log.txt
 
+          echo "## default-port azurite"
+          cat azurite_default_log.txt
+
   azurite-tests-windows:
     name: Azurite tests (Windows)
     runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-windows-x64' || 'windows-latest' }}
@@ -190,6 +205,7 @@ jobs:
         run: |
           npm install -g azurite
           azurite --skipApiVersionCheck --blobPort 28000 --queuePort 28001 --tablePort 28002 > azurite_log.txt 2>&1 &
+          azurite --skipApiVersionCheck --location "$RUNNER_TEMP/azurite-default" > azurite_default_log.txt 2>&1 &
           sleep 10
           ./scripts/upload_test_files_to_azurite.sh
 
@@ -235,3 +251,4 @@ jobs:
         shell: bash
         run: |
           cat azurite_log.txt
+          cat azurite_default_log.txt
