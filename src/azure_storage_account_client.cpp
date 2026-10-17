@@ -699,7 +699,23 @@ const SecretMatch LookupSecret(optional_ptr<FileOpener> opener, const std::strin
 	auto transaction = FileOpener::TryGetCatalogTransaction(opener);
 
 	if (secret_manager && transaction) {
-		return secret_manager->LookupSecret(*transaction, path, "azure");
+		// A secret applies to a path if the path starts with the secret's scope. A scope that names a directory
+		// usually ends in '/', but the path of that directory itself usually does not. DirectoryExists and
+		// CreateDirectory are called with exactly such a path:
+		//
+		//   scope: abfss://c@acct.dfs.core.windows.net/dir/
+		//   path:  abfss://c@acct.dfs.core.windows.net/dir
+		//
+		// ".../dir" does not start with ".../dir/", so no secret matched and the request was sent without
+		// credentials. We therefore look the path up with a trailing '/' added. The only new match is a scope
+		// that is exactly "<path>/". Everything that matched before still matches, with the same score:
+		//
+		//   scope ".../dir/"   path ".../dir"        matches now (before: no match)
+		//   scope ".../dir/"   path ".../dir/sub"    matches     (unchanged)
+		//   scope ".../dir/"   path ".../dir-other"  no match    (unchanged)
+		//   scope ".../my-pa"  path ".../my-pal"     matches     (unchanged, no '/' means a plain prefix)
+		const auto lookup_path = (!path.empty() && path.back() != '/') ? path + "/" : path;
+		return secret_manager->LookupSecret(*transaction, lookup_path, "azure");
 	}
 
 	return {};
