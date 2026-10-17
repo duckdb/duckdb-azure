@@ -2,11 +2,14 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/shared_ptr.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/main/client_context.hpp"
 
+#include <azure/core/url.hpp>
 #include <azure/storage/common/storage_exception.hpp>
 
 #include "azure_storage_account_client.hpp"
@@ -24,56 +27,187 @@ void AzureContextState::QueryEnd() {
 	is_valid = false;
 }
 
+static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed,
+                                bool require_account = false);
+
 AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
-                                 FileType file_type, const AzureOptions &options)
+                                 FileType file_type, const AzureOptions &options,
+                                 AzureMetadataCacheHandle metadata_cache_p)
     : FileHandle(fs, info.path, flags), flags(flags),
       // File info
       is_remote_loaded(false), file_type(file_type), length(0), last_modified(0),
       // Read info
       buffer_available(0), buffer_idx(0), file_offset(0), buffer_start(0), buffer_end(0),
       // Options
-      options(options) {
+      options(options), metadata_cache(std::move(metadata_cache_p)),
+      metadata_cache_generation(metadata_cache.cache ? metadata_cache.cache->GetGeneration() : 0) {
 	if (!flags.RequireParallelAccess() && !flags.DirectIO()) {
 		read_buffer = duckdb::unique_ptr<data_t[]>(new data_t[options.read_buffer_size]);
 	}
 
-	// Set metadata of file when available, it avoids to invoke to the storage to get them.
-	if (info.extended_info) {
-		auto &opts = info.extended_info->options;
-		auto entry1 = opts.find("file_size");
-		if (entry1 != opts.end()) {
-			length = entry1->second.GetValue<uint64_t>();
-		}
-		auto entry2 = opts.find("last_modified");
-		if (entry2 != opts.end()) {
-			last_modified = entry2->second.GetValue<timestamp_t>();
-		}
-		auto entry3 = opts.find("etag");
-		if (entry3 != opts.end()) {
-			etag = StringValue::Get(entry3->second);
-		}
-		// When glob supplied the full metadata triplet for a read, skip the HEAD (GetProperties) on open.
-		// Exclude trailing-slash paths: those follow the S3/Azure "foo/" dir-marker convention and must
-		// still be resolved to FILE_TYPE_DIR by LoadRemoteFileInfo rather than pre-typed as a regular file.
-		const bool have_all = entry1 != opts.end() && entry2 != opts.end() && entry3 != opts.end();
-		const bool looks_like_dir = !info.path.empty() && info.path.back() == '/';
-		if (have_all && !looks_like_dir && flags.OpenForReading() && !flags.OpenForWriting()) {
-			file_type = FileType::FILE_TYPE_REGULAR;
-			is_remote_loaded = true;
-		}
+	if (!flags.OpenForReading() || flags.OpenForWriting() || flags.OpenForAppending() || flags.ExclusiveCreate() ||
+	    !info.extended_info) {
+		return;
 	}
+	auto &opts = info.extended_info->options;
+	auto type_entry = opts.find("type");
+	auto size_entry = opts.find("file_size");
+	auto modified_entry = opts.find("last_modified");
+	auto etag_entry = opts.find("etag");
+	if (modified_entry == opts.end()) {
+		return;
+	}
+	if (type_entry != opts.end() && StringValue::Get(type_entry->second) == "directory") {
+		SetFileInfo(FileType::FILE_TYPE_DIR, 0, modified_entry->second.GetValue<timestamp_t>(), "");
+	} else if (size_entry != opts.end() && etag_entry != opts.end() && !StringUtil::EndsWith(info.path, "/")) {
+		SetFileInfo(FileType::FILE_TYPE_REGULAR, size_entry->second.GetValue<uint64_t>(),
+		            modified_entry->second.GetValue<timestamp_t>(), StringValue::Get(etag_entry->second));
+	}
+}
+
+void AzureFileHandle::SetFileInfo(FileType file_type_p, idx_t length_p, timestamp_t last_modified_p,
+                                  const string &etag_p) {
+	is_remote_loaded = true;
+	file_type = file_type_p;
+	length = file_type_p == FileType::FILE_TYPE_DIR ? 0 : length_p;
+	last_modified = last_modified_p;
+	etag = etag_p;
+	file_offset = 0;
 }
 
 bool AzureFileHandle::PostConstruct() {
 	return static_cast<AzureStorageFileSystem &>(file_system).LoadFileInfo(*this);
 }
 
+void AzureFileHandle::InvalidateMetadata() {
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		metadata_cache.Invalidate();
+	}
+}
+
+static bool CanUseMetadataCache(const AzureFileHandle &handle) {
+	// DFS strips trailing slashes from the resource name, but the handle still treats them as directory hints.
+	return handle.metadata_cache.cache && !handle.flags.OpenForWriting() && !handle.flags.OpenForAppending() &&
+	       !handle.flags.ExclusiveCreate() && !StringUtil::EndsWith(handle.GetPath(), "/");
+}
+
+static AzureFileInfo GetCacheEntry(const AzureFileHandle &handle) {
+	AzureFileInfo info;
+	info.file_type = handle.file_type;
+	info.length = handle.length;
+	info.last_modified = handle.last_modified;
+	info.etag = handle.etag;
+	return info;
+}
+
+bool AzureStorageFileSystem::ParseAzureMetadataCacheEnabled(optional_ptr<FileOpener> opener) {
+	Value metadata_cache_val;
+	if (FileOpener::TryGetCurrentSetting(opener, "enable_http_metadata_cache", metadata_cache_val) &&
+	    !metadata_cache_val.IsNull()) {
+		return metadata_cache_val.GetValue<bool>();
+	}
+	return false;
+}
+
+AzureStorageFileSystem::AzureStorageFileSystem(shared_ptr<AzureMetadataCache> global_metadata_cache_p)
+    : global_metadata_cache(std::move(global_metadata_cache_p)) {
+	D_ASSERT(global_metadata_cache);
+}
+
+uint64_t AzureMetadataCacheKeyHash::operator()(const AzureMetadataCacheKey &key) const {
+	auto hash = Hash(key.endpoint_identity.data(), key.endpoint_identity.size());
+	hash = CombineHash(Hash(hash), Hash(key.path.data(), key.path.size()));
+	hash = CombineHash(Hash(hash), Hash(key.snapshot.data(), key.snapshot.size()));
+	return CombineHash(Hash(hash), Hash(key.version.data(), key.version.size()));
+}
+
+// Use the SDK's resolved endpoint, which includes connection-string overrides. Only known Azure/OneLake
+// Blob and DFS endpoints share an identity; retain the rest of the host to distinguish endpoint namespaces.
+static string GetMetadataCacheEndpointIdentity(const Azure::Core::Url &url) {
+	auto host = StringUtil::Lower(url.GetHost());
+	const bool storage_endpoint =
+	    StringUtil::EndsWith(host, ".core.windows.net") || StringUtil::EndsWith(host, ".core.chinacloudapi.cn") ||
+	    StringUtil::EndsWith(host, ".core.usgovcloudapi.net") || StringUtil::EndsWith(host, ".core.cloudapi.de") ||
+	    StringUtil::EndsWith(host, ".storage.azure.net") || StringUtil::EndsWith(host, ".dfs.fabric.microsoft.com") ||
+	    StringUtil::EndsWith(host, ".blob.fabric.microsoft.com");
+	if (storage_endpoint) {
+		auto service = host.find(".blob.");
+		if (service != string::npos) {
+			host.replace(service, 6, ".");
+		} else {
+			service = host.find(".dfs.");
+			if (service != string::npos) {
+				host.replace(service, 5, ".");
+			}
+		}
+	}
+	auto port = url.GetPort();
+	if (!storage_endpoint) {
+		// Custom endpoints can serve different storage at different schemes or ports (e.g. Azurite instances).
+		auto scheme = StringUtil::Lower(url.GetScheme());
+		if (port == 0) {
+			port = scheme == "https" ? 443 : 80;
+		}
+		host = scheme + "://" + host + ":" + to_string(port);
+	} else if (port != 0 && port != 80 && port != 443) {
+		// Standard Azure ports are aliases, but a nonstandard port still identifies a distinct endpoint.
+		host += ":" + to_string(port);
+	}
+	return host;
+}
+
+static AzureMetadataCacheKey GetMetadataCacheKey(const string &resolved_url) {
+	Azure::Core::Url url(resolved_url);
+	AzureMetadataCacheKey key;
+	key.endpoint_identity = GetMetadataCacheEndpointIdentity(url);
+	key.path = Azure::Core::Url::Decode(url.GetPath());
+	auto query = url.GetQueryParameters();
+	auto snapshot = query.find("snapshot");
+	if (snapshot != query.end()) {
+		key.snapshot = Azure::Core::Url::Decode(snapshot->second);
+	}
+	auto version = query.find("versionid");
+	if (version != query.end()) {
+		key.version = Azure::Core::Url::Decode(version->second);
+	}
+	return key;
+}
+
+AzureMetadataCacheHandle AzureStorageFileSystem::GetMetadataCache(optional_ptr<FileOpener> opener, const string &path,
+                                                                  const AzureParsedUrl &parsed_url,
+                                                                  const string &resolved_url) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	auto client_context = FileOpener::TryGetClientContext(opener);
+	if (!db) {
+		return {};
+	}
+	shared_ptr<AzureMetadataCache> cache;
+	if (ParseAzureMetadataCacheEnabled(opener) && !GetContextKeyPath(opener, path, parsed_url, true).empty()) {
+		cache = global_metadata_cache;
+	} else if (client_context) {
+		cache = client_context->registered_state->GetOrCreate<AzureMetadataCache>("azure_metadata_cache", true);
+	}
+	return {std::move(cache), global_metadata_cache, GetMetadataCacheKey(resolved_url)};
+}
+
 bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 	try {
-		LoadRemoteFileInfo(handle);
-		if (handle.flags.ReturnNullIfExists()) {
-			return false;
+		// Caller metadata can predate an invalidation, or describe a synthetic directory. Keep it on this handle.
+		if (!handle.IsRemoteLoaded()) {
+			AzureFileInfo cached_info;
+			if (CanUseMetadataCache(handle) &&
+			    handle.metadata_cache.cache->Find(handle.metadata_cache.key, cached_info)) {
+				handle.SetFileInfo(cached_info.file_type, cached_info.length, cached_info.last_modified,
+				                   cached_info.etag);
+			} else {
+				LoadRemoteFileInfo(handle);
+				if (CanUseMetadataCache(handle)) {
+					handle.metadata_cache.cache->Insert(handle.metadata_cache.key, GetCacheEntry(handle),
+					                                    handle.metadata_cache_generation);
+				}
+			}
 		}
+		return !handle.flags.ReturnNullIfExists();
 	} catch (const Azure::Storage::StorageException &e) {
 		if (int(e.StatusCode) == 404 && handle.flags.ReturnNullIfNotExists()) {
 			return false;
@@ -88,7 +222,6 @@ bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 		                  "the credentials used were wrong. Original error message: '%s' ",
 		                  handle.path, e.what());
 	}
-	return true;
 }
 
 unique_ptr<FileHandle> AzureStorageFileSystem::OpenFileExtended(const OpenFileInfo &info, FileOpenFlags flags,
@@ -207,7 +340,8 @@ int64_t AzureStorageFileSystem::Read(FileHandle &handle, void *buffer, int64_t n
 	return nr_bytes;
 }
 
-static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed) {
+static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed,
+                                bool require_account) {
 	// context key == proto://{storage_account}{.}{endpoint}
 	// when storage account / endpoint unavailable, try to fetch via secret manager
 	string account;
@@ -236,6 +370,9 @@ static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &p
 	// build key from account and/or endpoint, ow return ""
 	const auto has_account = !account.empty();
 	const auto has_endpoint = !endpoint.empty();
+	if (require_account && !has_account) {
+		return "";
+	}
 	if (!has_account && !has_endpoint) {
 		return "";
 	}

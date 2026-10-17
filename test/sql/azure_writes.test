@@ -13,7 +13,8 @@ require-env AZURE_STORAGE_CONNECTION_STRING
 statement ok
 CREATE SECRET s1 (
     TYPE azure,
-    CONNECTION_STRING '{AZURE_STORAGE_CONNECTION_STRING}'
+    CONNECTION_STRING '{AZURE_STORAGE_CONNECTION_STRING}',
+    ACCOUNT_NAME regexp_extract('{AZURE_STORAGE_CONNECTION_STRING}', 'AccountName=([^;]+)', 1)
 );
 
 ## Basic write & read
@@ -131,3 +132,69 @@ RESET azure_write_block_size;
 statement ok
 RESET azure_write_staged_blocks_per_commit;
 
+# Query-local caching is cleared between queries, not between opens.
+statement ok
+SET enable_external_file_cache = false;
+
+statement ok
+SET azure_http_stats = true;
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM 'az://{AZ_TEMP_DIR}/write-id-42.csv';
+----
+analyzed_plan	<REGEX>:.*Azure HTTP Stats.*\#HEAD\: 1.*
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM 'az://{AZ_TEMP_DIR}/write-id-42.csv';
+----
+analyzed_plan	<REGEX>:.*Azure HTTP Stats.*\#HEAD\: 1.*
+
+# Global metadata entries are shared across URI aliases.
+statement ok
+SET enable_http_metadata_cache = true;
+
+statement ok
+COPY (SELECT i FROM range(10) t(i))
+TO 'az://{AZ_TEMP_DIR}/metadata-cache-alias.csv' (HEADER false);
+
+query I
+SELECT count(*)
+FROM read_csv('az://{AZ_TEMP_DIR}/metadata-cache-alias.csv', header = false, columns = {'i': 'BIGINT'});
+----
+10
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM read_csv('azure://{AZ_TEMP_DIR}/metadata-cache-alias.csv', header = false, columns = {'i': 'BIGINT'});
+----
+analyzed_plan	<REGEX>:.*Azure HTTP Stats.*\#HEAD\: 0.*
+
+statement ok
+COPY (SELECT i FROM range(1000) t(i))
+TO 'azure://{AZ_TEMP_DIR}/metadata-cache-alias.csv' (HEADER false);
+
+query I
+SELECT count(*)
+FROM read_csv('az://{AZ_TEMP_DIR}/metadata-cache-alias.csv', header = false, columns = {'i': 'BIGINT'});
+----
+1000
+
+# A writer with shared caching disabled must still invalidate shared entries.
+statement ok
+SET enable_http_metadata_cache = false;
+
+statement ok
+COPY (SELECT i FROM range(100) t(i))
+TO 'azure://{AZ_TEMP_DIR}/metadata-cache-alias.csv' (HEADER false);
+
+statement ok
+SET enable_http_metadata_cache = true;
+
+query I
+SELECT count(*)
+FROM read_csv('az://{AZ_TEMP_DIR}/metadata-cache-alias.csv', header = false, columns = {'i': 'BIGINT'});
+----
+100
+
+statement ok
+RESET enable_http_metadata_cache;

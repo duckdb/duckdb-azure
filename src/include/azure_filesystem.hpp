@@ -4,14 +4,15 @@
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/common/shared_ptr.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/main/client_context_state.hpp"
 
 #include <azure/core/datetime.hpp>
 #include <cstdint>
 #include <ctime>
-
 namespace duckdb {
 
 struct AzureOptions {
@@ -25,6 +26,116 @@ struct AzureOptions {
 	idx_t read_buffer_size = (idx_t)8 * 1024 * 1024;
 	idx_t write_block_size = WRITE_BLOCK_SIZE_DEFAULT;
 	idx_t write_staged_blocks_per_commit = 0;
+};
+
+struct AzureFileInfo {
+	FileType file_type = FileType::FILE_TYPE_INVALID;
+	idx_t length = 0;
+	timestamp_t last_modified = timestamp_t(0);
+	string etag;
+};
+
+struct AzureMetadataCacheKey {
+	// Canonical endpoint identity shared by known Azure/OneLake Blob and DFS aliases.
+	string endpoint_identity;
+	string path;
+	string snapshot;
+	string version;
+
+	bool operator==(const AzureMetadataCacheKey &other) const {
+		return endpoint_identity == other.endpoint_identity && path == other.path && snapshot == other.snapshot &&
+		       version == other.version;
+	}
+
+	bool operator!=(const AzureMetadataCacheKey &other) const {
+		return !(*this == other);
+	}
+};
+
+struct AzureMetadataCacheKeyHash {
+	uint64_t operator()(const AzureMetadataCacheKey &key) const;
+};
+
+class AzureMetadataCache : public ClientContextState {
+public:
+	explicit AzureMetadataCache(bool flush_on_query_end_p) : flush_on_query_end(flush_on_query_end_p) {
+	}
+
+	uint64_t GetGeneration() {
+		lock_guard<mutex> parallel_lock(lock);
+		return generation;
+	}
+
+	void Insert(const AzureMetadataCacheKey &key, const AzureFileInfo &val, uint64_t expected_generation) {
+		lock_guard<mutex> parallel_lock(lock);
+		if (generation == expected_generation) {
+			map[key] = val;
+		}
+	}
+
+	void Erase(const AzureMetadataCacheKey &key) {
+		lock_guard<mutex> parallel_lock(lock);
+		generation++;
+		map.erase(key);
+	}
+
+	bool Find(const AzureMetadataCacheKey &key, AzureFileInfo &ret_val) {
+		lock_guard<mutex> parallel_lock(lock);
+		auto lookup = map.find(key);
+		if (lookup == map.end()) {
+			return false;
+		}
+		ret_val = lookup->second;
+		return true;
+	}
+
+	void Clear() {
+		lock_guard<mutex> parallel_lock(lock);
+		generation++;
+		map.clear();
+	}
+
+	void QueryEnd(ClientContext &context) override {
+		if (flush_on_query_end) {
+			Clear();
+		}
+	}
+
+private:
+	// Query-local caches are still shared across parallel tasks within a query.
+	mutex lock;
+	unordered_map<AzureMetadataCacheKey, AzureFileInfo, AzureMetadataCacheKeyHash> map;
+	// Any invalidation also rejects metadata loads already in flight.
+	uint64_t generation = 0;
+	bool flush_on_query_end;
+};
+
+struct AzureMetadataCacheHandle {
+	shared_ptr<AzureMetadataCache> cache;
+	shared_ptr<AzureMetadataCache> global_cache;
+	AzureMetadataCacheKey key;
+
+	void Invalidate() const {
+		if (cache) {
+			cache->Erase(key);
+		}
+		if (global_cache && global_cache != cache) {
+			global_cache->Erase(key);
+		}
+	}
+};
+
+// A failed response cannot prove that the remote mutation was not applied.
+class AzureMetadataCacheInvalidationGuard {
+public:
+	explicit AzureMetadataCacheInvalidationGuard(const AzureMetadataCacheHandle &cache_p) : cache(cache_p) {
+	}
+	~AzureMetadataCacheInvalidationGuard() {
+		cache.Invalidate();
+	}
+
+private:
+	const AzureMetadataCacheHandle &cache;
 };
 
 class AzureContextState : public ClientContextState {
@@ -58,6 +169,8 @@ class AzureStorageFileSystem;
 class AzureFileHandle : public FileHandle {
 public:
 	virtual bool PostConstruct();
+	void SetFileInfo(FileType file_type_p, idx_t length_p, timestamp_t last_modified_p, const string &etag_p);
+	void InvalidateMetadata();
 
 	bool IsRemoteLoaded() {
 		return is_remote_loaded;
@@ -69,7 +182,7 @@ public:
 
 protected:
 	AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags, FileType file_type,
-	                const AzureOptions &options);
+	                const AzureOptions &options, AzureMetadataCacheHandle metadata_cache);
 
 public:
 	FileOpenFlags flags;
@@ -89,12 +202,15 @@ public:
 	idx_t file_offset;
 	idx_t buffer_start;
 	idx_t buffer_end;
-
 	const AzureOptions options;
+	AzureMetadataCacheHandle metadata_cache;
+	uint64_t metadata_cache_generation;
 };
 
 class AzureStorageFileSystem : public FileSystem {
 public:
+	explicit AzureStorageFileSystem(shared_ptr<AzureMetadataCache> global_metadata_cache);
+
 	// FS methods
 	duckdb::unique_ptr<FileHandle> OpenFile(const string &path, FileOpenFlags flags,
 	                                        optional_ptr<FileOpener> opener = nullptr) override;
@@ -142,10 +258,16 @@ protected:
 
 	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
 	static AzureOptions ParseAzureOptions(optional_ptr<FileOpener> opener);
+	static bool ParseAzureMetadataCacheEnabled(optional_ptr<FileOpener> opener);
+	AzureMetadataCacheHandle GetMetadataCache(optional_ptr<FileOpener> opener, const string &path,
+	                                          const AzureParsedUrl &parsed_url, const string &resolved_url);
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);
 	static string StripETagQuotes(string etag);
+
+private:
+	shared_ptr<AzureMetadataCache> global_metadata_cache;
 };
 
 } // namespace duckdb
