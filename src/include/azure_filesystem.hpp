@@ -30,6 +30,8 @@ struct AzureOptions {
 class AzureContextState : public ClientContextState {
 public:
 	const AzureOptions options;
+	// True when no secret matched the path and the service client sends unauthenticated requests
+	bool connected_anonymously = false;
 
 public:
 	virtual bool IsValid() const;
@@ -73,6 +75,9 @@ protected:
 
 public:
 	FileOpenFlags flags;
+
+	// True when the underlying client sends unauthenticated requests (no secret matched the path)
+	bool connected_anonymously = false;
 
 	// File info
 	bool is_remote_loaded;

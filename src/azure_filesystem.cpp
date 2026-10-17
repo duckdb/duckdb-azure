@@ -78,9 +78,15 @@ bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 		if (int(e.StatusCode) == 404 && handle.flags.ReturnNullIfNotExists()) {
 			return false;
 		}
+		string hint;
+		if (handle.connected_anonymously && (int(e.StatusCode) == 401 || int(e.StatusCode) == 403)) {
+			hint = " The request was sent without authentication because no azure secret matched this path. If the "
+			       "storage account is not public, create an azure secret (CREATE SECRET ... TYPE azure ...) whose "
+			       "SCOPE covers this path, or check the scope of the existing secrets.";
+		}
 		throw IOException(
-		    "AzureStorageFileSystem open file '%s' failed with code '%s', Reason Phrase: '%s', Message: '%s'",
-		    handle.path, e.ErrorCode, e.ReasonPhrase, e.Message);
+		    "AzureStorageFileSystem open file '%s' failed with code '%s', Reason Phrase: '%s', Message: '%s'%s",
+		    handle.path, e.ErrorCode, e.ReasonPhrase, e.Message, hint);
 	} catch (const IOException &e) {
 		throw;
 	} catch (const std::exception &e) {
@@ -207,7 +213,7 @@ int64_t AzureStorageFileSystem::Read(FileHandle &handle, void *buffer, int64_t n
 	return nr_bytes;
 }
 
-static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed) {
+static string GetContextKeyPath(SecretMatch &secret_match, const AzureParsedUrl &parsed) {
 	// context key == proto://{storage_account}{.}{endpoint}
 	// when storage account / endpoint unavailable, try to fetch via secret manager
 	string account;
@@ -218,7 +224,6 @@ static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &p
 		endpoint = parsed.endpoint;
 	} else {
 		// no storage account? map it from the secret if possible
-		auto secret_match = LookupSecret(opener, path);
 		if (secret_match.HasMatch()) {
 			const auto &secret = dynamic_cast<const KeyValueSecret &>(secret_match.GetSecret());
 
@@ -245,6 +250,14 @@ static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &p
 	return has_account ? account : endpoint;
 }
 
+static string GetContextCredentialKey(SecretMatch &secret_match) {
+	if (secret_match.HasMatch()) {
+		const auto &secret = secret_match.GetSecret();
+		return secret.GetName() + "/" + secret.GetProvider();
+	}
+	return "anonymous";
+}
+
 shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(optional_ptr<FileOpener> opener,
                                                                                 const string &path,
                                                                                 const AzureParsedUrl &parsed_url) {
@@ -257,12 +270,16 @@ shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(
 
 	shared_ptr<AzureContextState> result;
 	if (azure_context_caching && client_context) {
-		string key_path = GetContextKeyPath(opener, path, parsed_url);
+		auto secret_match = LookupSecret(opener, path);
+		string key_path = GetContextKeyPath(secret_match, parsed_url);
 		auto &registered_state = client_context->registered_state;
 
 		// Ok, now use account in key, or otherwise skip the cache
 		if (!key_path.empty()) {
-			auto context_key = GetContextPrefix() + key_path;
+			// Include the credential identity in the key: a client created for the same storage account
+			// under a different credential (e.g. anonymous, or another secret vended for a different
+			// table) must not be reused for this path.
+			auto context_key = GetContextPrefix() + key_path + "#" + GetContextCredentialKey(secret_match);
 			result = registered_state->Get<AzureContextState>(context_key);
 			if (!result || !result->IsValid()) {
 				result = CreateStorageContext(opener, path, parsed_url);
