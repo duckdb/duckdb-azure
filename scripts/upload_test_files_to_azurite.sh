@@ -8,6 +8,14 @@ az storage container create -n testing-private --connection-string "${conn_strin
 az storage container create -n testing-public --connection-string "${conn_string}" --public-access blob
 az storage container create -n writes --connection-string "${conn_string}"
 
+# The connection-string shortcut uses Azurite's default port (10000).
+if [[ -n "${AZURITE_SHORTCUT_PROXY:-}" ]]; then
+  HTTP_PROXY="${AZURITE_SHORTCUT_PROXY}" http_proxy="${AZURITE_SHORTCUT_PROXY}" NO_PROXY='' no_proxy='' \
+    az storage container create -n writes --connection-string "UseDevelopmentStorage=true" || exit 1
+else
+  az storage container create -n writes --connection-string "UseDevelopmentStorage=true" || exit 1
+fi
+
 copy_file() {
   local from="${1}"
   local to="${2}"

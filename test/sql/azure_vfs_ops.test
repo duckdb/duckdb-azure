@@ -25,7 +25,7 @@ SET azure_storage_connection_string = '{AZURE_STORAGE_CONNECTION_STRING}';
 statement error
 INSTALL 'az://invalid-container/dir/ext.duckdb_extension';
 ----
-container does not exist
+<REGEX>:.*(ContainerNotFound|container does not exist).*
 
 
 statement error
@@ -38,7 +38,7 @@ Cannot identify the storage account
 statement error
 INSTALL 'az://testing-public/non-existent.duckdb_extension';
 ----
-blob does not exist
+<REGEX>:.*(BlobNotFound|blob does not exist).*
 
 statement error
 INSTALL 'az://testing-public/l.csv';
