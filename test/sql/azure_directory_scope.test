@@ -1,0 +1,82 @@
+# name: test/sql/azure_directory_scope.test
+# description: a secret scoped to a directory ('<dir>/') is also used for operations on the directory path itself
+# group: [sql]
+
+require azure
+
+require-env AZ_STORAGE_ACCOUNT
+
+# Scopes are matched by prefix, so the path '<container>/dir' (no trailing slash) used to miss a secret scoped to
+# '<container>/dir/'. Operations that act on the directory itself, such as the DirectoryExists check that precedes a
+# COPY with PER_THREAD_OUTPUT, then ran without that secret. This file covers azure:// (blob); the abfss:// variant is
+# test/sql/cloud/azure_directory_scope_abfss.test.
+#
+# The secrets below fail while the client is created, so no request is sent and the error message shows which secret
+# a path resolved to:
+# - the secrets scoped to a directory or a prefix fail with 'invalid connection string'
+# - the account wide secret fails with 'Unexpected end of Base64 encoded string'
+
+statement ok
+CREATE SECRET account_wide (
+    TYPE AZURE,
+    SCOPE 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/',
+    CONNECTION_STRING 'AccountName={AZ_STORAGE_ACCOUNT};AccountKey=not-base64-!!!'
+)
+
+statement ok
+CREATE SECRET dir_scope (
+    TYPE AZURE,
+    SCOPE 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/dir/',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+statement ok
+CREATE SECRET prefix_scope (
+    TYPE AZURE,
+    SCOPE 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/my-pa',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+# The directory path itself, without the trailing slash, resolves to the secret scoped to '<dir>/'
+statement error
+COPY (SELECT 1 AS id) TO 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/dir' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+invalid connection string
+
+# Paths below the directory still resolve to it
+statement error
+COPY (SELECT 1 AS id) TO 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/dir/sub' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+invalid connection string
+
+# A sibling that only shares the prefix does not match a scope that ends in '/'
+statement error
+COPY (SELECT 1 AS id) TO 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/dir-other' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+# A scope without a trailing slash stays a plain prefix match
+statement error
+COPY (SELECT 1 AS id) TO 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/my-path' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+invalid connection string
+
+statement error
+COPY (SELECT 1 AS id) TO 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/my-pal' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+invalid connection string
+
+# A path outside every directory scope falls back to the account wide secret
+statement error
+COPY (SELECT 1 AS id) TO 'azure://{AZ_STORAGE_ACCOUNT}.blob.core.windows.net/testing-private/directory_scope/elsewhere' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+statement ok
+DROP SECRET prefix_scope
+
+statement ok
+DROP SECRET dir_scope
+
+statement ok
+DROP SECRET account_wide
