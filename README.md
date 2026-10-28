@@ -99,6 +99,22 @@ IDs may be specified.
 
 See also [Azure Identity Managed Identity Support](https://github.com/Azure/azure-sdk-for-cpp/tree/main/sdk/identity/azure-identity#managed-identity-support)
 
+### Bearer token for other extensions
+
+With `REFRESH 'auto'`, a `CREDENTIAL_CHAIN` secret also mints a bearer token when it is created and stores it as
+`token` (redacted), together with `expiration_epoch_ms` and `refresh_info`. Other extensions can send that token to
+Azure services and re-create the secret from `refresh_info` when it expires, the same way duckdb-aws secrets with
+`REFRESH 'auto'` work. `TOKEN_SCOPE` sets the token audience (default `https://storage.azure.com/.default`).
+
+```sql
+CREATE SECRET azure_token (
+    TYPE AZURE,
+    PROVIDER CREDENTIAL_CHAIN,
+    CHAIN 'cli',
+    REFRESH 'auto'
+);
+```
+
 ## Writing
 
 Writing to Azure Storage stages blocks during upload; staged blocks are not

@@ -1,6 +1,8 @@
 #include "azure_secret.hpp"
 
 #include "azure_dfs_filesystem.hpp"
+#include "azure_storage_account_client.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -19,6 +21,9 @@ constexpr auto COMMON_OPTIONS = {
     "http_proxy", "proxy_user_name", "proxy_password",
     // Storage account option
     "account_name", "endpoint"};
+
+//! Audience of Azure Storage, which is also what OneLake's Iceberg REST catalog accepts
+constexpr auto DEFAULT_TOKEN_SCOPE = "https://storage.azure.com/.default";
 
 static void CopySecret(const std::string &key, const CreateSecretInput &input, KeyValueSecret &result) {
 	auto val = input.options.find(key);
@@ -76,9 +81,39 @@ static unique_ptr<BaseSecret> CreateAzureSecretFromCredentialChain(ClientContext
 
 	// Manage specific secret option
 	CopySecret("chain", input, *result);
+	CopySecret("token_scope", input, *result);
 
 	// Redact sensible keys
 	RedactCommonKeys(*result);
+
+	// With refresh 'auto' the secret carries a bearer token for consumers outside this extension (e.g. duckdb-iceberg
+	// authenticating to a REST catalog). Same contract as duckdb-aws: replaying 'refresh_info' as the options of a new
+	// CREATE SECRET re-runs the chain, and 'expiration_epoch_ms' tells the consumer when to do so.
+	auto refresh_entry = input.options.find("refresh");
+	if (refresh_entry != input.options.end()) {
+		auto refresh = StringUtil::Lower(refresh_entry->second.ToString());
+		if (refresh != "auto") {
+			throw InvalidInputException("Unsupported value '%s' for 'refresh', only 'auto' is supported", refresh);
+		}
+
+		child_list_t<Value> refresh_info;
+		for (const auto &named_param : input.options) {
+			refresh_info.emplace_back(Identifier(StringUtil::Lower(named_param.first)), named_param.second);
+		}
+		result->secret_map["refresh_info"] = Value::STRUCT(std::move(refresh_info));
+
+		std::string token_scope = DEFAULT_TOKEN_SCOPE;
+		auto token_scope_value = result->TryGetValue("token_scope");
+		if (!token_scope_value.IsNull()) {
+			token_scope = token_scope_value.ToString();
+		}
+		auto access_token = FetchAzureAccessToken(context, *result, token_scope);
+		result->secret_map["token"] = Value(access_token.token);
+		result->secret_map["expiration_epoch_ms"] = Value::BIGINT(access_token.expiration_epoch_ms);
+		result->redact_keys.insert("token");
+		// May contain proxy_password
+		result->redact_keys.insert("refresh_info");
+	}
 
 	return std::move(result);
 }
@@ -196,6 +231,8 @@ void CreateAzureSecretFunctions::Register(ExtensionLoader &loader) {
 	// Register the credential_chain secret provider
 	CreateSecretFunction cred_chain_function = {type, "credential_chain", CreateAzureSecretFromCredentialChain};
 	cred_chain_function.named_parameters["chain"] = LogicalType::VARCHAR;
+	cred_chain_function.named_parameters["refresh"] = LogicalType::VARCHAR;
+	cred_chain_function.named_parameters["token_scope"] = LogicalType::VARCHAR;
 	RegisterCommonSecretParameters(cred_chain_function);
 	loader.RegisterFunction(cred_chain_function);
 
