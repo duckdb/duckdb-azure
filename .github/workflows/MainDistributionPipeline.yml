@@ -24,6 +24,7 @@ jobs:
         id: runners
         uses: duckdb/duckdb-ci/detect-runners@main
 
+  # TODO: switch extension-ci-tools to v2.0 when ready
   duckdb-stable-build:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
@@ -51,7 +52,6 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
       extension_name: *ext_name
-      duckdb_version: 1a779c5c43100f162d19237e3cf3e64f36bc3485
       ci_tools_version: *ci_tools_ref
       # TODO: format_checks += ;tidy
       format_checks: format

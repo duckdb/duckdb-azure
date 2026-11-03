@@ -157,6 +157,12 @@ Deletes and directory creation also invalidate cached metadata. Mutation errors
 and missing-object delete probes evict entries as well, so uncertain responses
 do not preserve stale metadata. Changes made outside this extension are not tracked.
 
+## HTTP statistics
+
+Set `azure_http_stats = true` to include Azure HTTP statistics in `EXPLAIN ANALYZE`.
+Downloaded bytes count response bodies, not the object sizes advertised by HEAD
+responses. HEAD requests still contribute to the request count.
+
 ## Supported architectures
 
 The extension is tested & distributed for Linux (x64, arm64), MacOS (x64, arm64) and Windows (x64)
