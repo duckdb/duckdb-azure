@@ -111,6 +111,13 @@ partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
 partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
 partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
+# ... also for a single-directory pattern; a path built from the prefix compares equal
+query I
+SELECT file = getvariable('container_at_account') || 'partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv'
+FROM glob(getvariable('container_at_account') || 'partitioned/l_receipmonth=1997/l_shipmode=TRUCK/*.csv');
+----
+true
+
 endloop
 
 # Enable http info for the explain analyze statement
