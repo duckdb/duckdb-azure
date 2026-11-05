@@ -45,10 +45,17 @@ abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.c
 abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
 # Check data integrity for Azure ADLS GEN2 storage account
-statement error
+query I
 SELECT file FROM glob('abfss://{ABFSS_DATA_DIR}/**/*.csv') ORDER BY file;
 ----
-<REGEX>:.*Not implemented Error:.*abfss.*recursive lookup patterns.*
+abfss://{ABFSS_DATA_DIR}/l.csv
+abfss://{ABFSS_DATA_DIR}/lineitem.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
 query I
 SELECT count(*) FROM 'abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
@@ -94,6 +101,14 @@ SELECT count(*) FROM read_csv(
 );
 ----
 2317
+
+query I
+SELECT count(*) FROM read_csv(
+  '{proto}' || parse_dirname('{ABFSS_DATA_DIR}') || '@{ABFSS_STORAGE_ACCOUNT}.dfs.core.windows.net/'
+  || array_to_string(parse_path('{ABFSS_DATA_DIR}')[2:], '/') || '/partitioned/**/*.csv'
+);
+----
+6936
 
 endloop
 
