@@ -29,6 +29,26 @@ CREATE SECRET spn (
     ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}'
 );
 
+# Redundant separators must not shift the pattern index or directory-name offset.
+foreach separator /// //
+
+query I
+SELECT file FROM glob('abfss://{ABFSS_DATA_DIR}{separator}*.parquet');
+----
+abfss://{ABFSS_DATA_DIR}/l.parquet
+
+query I
+SELECT count(*) FROM glob('abfss://{ABFSS_DATA_DIR}{separator}partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv');
+----
+2
+
+query I
+SELECT count(*) FROM glob('abfss://{ABFSS_DATA_DIR}{separator}partitio*/l_receipmonth=*/l_shipmode=TRUCK/*.csv');
+----
+2
+
+endloop
+
 # Check that with Azure ADLS GEN2 directories are not show in globs
 query I
 SELECT file FROM glob('abfss://{ABFSS_DATA_DIR}/**') ORDER BY file;

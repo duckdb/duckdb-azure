@@ -37,10 +37,10 @@ inline static bool IsDfsScheme(const string &fpath) {
 
 static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient &fs, const string &path,
                  const vector<string> &pattern_splits, idx_t pattern_index, vector<OpenFileInfo> &out_result) {
+	D_ASSERT(pattern_index < pattern_splits.size());
 	auto directory_client = fs.GetDirectoryClient(path);
 	const auto &pattern = pattern_splits[pattern_index];
 	const bool recursive = pattern == "**";
-	const auto name_start = path.empty() ? 0 : path.length() + 1;
 
 	Azure::Storage::Files::DataLake::ListPathsOptions options;
 	while (true) {
@@ -57,6 +57,8 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 		for (const auto &elt : res.Paths) {
 			if (elt.IsDirectory) {
 				if (!recursive && pattern_index + 1 < pattern_splits.size()) {
+					const auto separator = elt.Name.rfind('/');
+					const auto name_start = separator == string::npos ? 0 : separator + 1;
 					if (Glob(elt.Name.data() + name_start, elt.Name.length() - name_start, pattern.data(),
 					         pattern.length())) {
 						Walk(fs, elt.Name, pattern_splits, pattern_index + 1, out_result);
@@ -244,14 +246,19 @@ vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpe
 	auto dfs_storage_service = ConnectToDfsStorageAccount(opener, path, azure_url);
 	auto dfs_filesystem_client = dfs_storage_service.GetFileSystemClient(azure_url.container);
 
-	auto index_root_dir = azure_url.path.rfind('/', first_wildcard_pos);
-	if (index_root_dir == string::npos) {
-		index_root_dir = 0;
-	}
-	auto shared_path = azure_url.path.substr(0, index_root_dir);
-
 	const auto pattern_splits = StringUtil::Split(azure_url.path, "/");
-	const auto pattern_index = shared_path.empty() ? 0 : std::count(shared_path.begin(), shared_path.end(), '/') + 1;
+	idx_t pattern_index = 0;
+	string shared_path;
+	for (const auto &part : pattern_splits) {
+		if (part.find_first_of("*[\\") != string::npos) {
+			break;
+		}
+		if (!shared_path.empty()) {
+			shared_path += '/';
+		}
+		shared_path += part;
+		pattern_index++;
+	}
 	vector<OpenFileInfo> result;
 	Walk(dfs_filesystem_client, shared_path, pattern_splits, pattern_index, result);
 
