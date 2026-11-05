@@ -266,9 +266,10 @@ shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(
 			result = registered_state->Get<AzureContextState>(context_key);
 			if (!result || !result->IsValid()) {
 				result = CreateStorageContext(opener, path, parsed_url);
+				registered_state->Remove(context_key);
 				registered_state->Insert(context_key, result);
-				return result;
 			}
+			return result;
 		}
 	}
 
