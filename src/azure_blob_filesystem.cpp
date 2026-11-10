@@ -143,6 +143,7 @@ unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenF
 
 	auto handle =
 	    make_uniq<AzureBlobStorageFileHandle>(*this, info, flags, storage_context->options, std::move(blob_client));
+	handle->connected_anonymously = storage_context->connected_anonymously;
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -433,7 +434,11 @@ shared_ptr<AzureContextState> AzureBlobStorageFileSystem::CreateStorageContext(o
                                                                                const AzureParsedUrl &parsed_url) {
 	auto azure_options = ParseAzureOptions(opener);
 
-	return make_shared_ptr<AzureBlobContextState>(ConnectToBlobStorageAccount(opener, path, parsed_url), azure_options);
+	bool connected_anonymously = false;
+	auto state = make_shared_ptr<AzureBlobContextState>(
+	    ConnectToBlobStorageAccount(opener, path, parsed_url, &connected_anonymously), azure_options);
+	state->connected_anonymously = connected_anonymously;
+	return state;
 }
 
 int64_t AzureBlobStorageFileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes) {
