@@ -68,8 +68,12 @@ class Mock(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def not_found(self, head=False):
-        self.reply(404, b"" if head else b'{"error":{"code":"PathNotFound","message":"not found"}}',
-                   {"x-ms-error-code": "PathNotFound", "Content-Type": "application/json"}, head)
+        self.reply(
+            404,
+            b"" if head else b'{"error":{"code":"PathNotFound","message":"not found"}}',
+            {"x-ms-error-code": "PathNotFound", "Content-Type": "application/json"},
+            head,
+        )
 
     def do_HEAD(self):
         path, _ = self.parse()
@@ -108,8 +112,15 @@ class Mock(http.server.BaseHTTPRequestHandler):
             entries = [(n, d) for n, d in entries if "/" not in n[len(prefix) :]]
         paths = []
         for name, is_dir in entries:
-            entry = dict(name=name, lastModified=NOW, contentLength="0" if is_dir else str(len(FILES[name])),
-                         owner="$superuser", group="$superuser", permissions="rwxr-x---", etag="0x1")
+            entry = dict(
+                name=name,
+                lastModified=NOW,
+                contentLength="0" if is_dir else str(len(FILES[name])),
+                owner="$superuser",
+                group="$superuser",
+                permissions="rwxr-x---",
+                etag="0x1",
+            )
             if is_dir:
                 entry["isDirectory"] = "true"
             paths.append(entry)
@@ -149,8 +160,11 @@ for prefix in (AT, SLASH, f"abfs://c@{ACCT}.dfs.core.windows.net/", "abfss://c/"
 # the blob file system is not touched by #211; its spellings must stay as they are
 GLOBS += [
     ("az://c/data/*.csv", "az://c/", ["data/a.csv"]),
-    (f"az://{ACCT}.blob.core.windows.net/c/data/**", f"az://{ACCT}.blob.core.windows.net/c/",
-     ["data/a.csv", "data/sub/b.csv", "data/sub/deep/c.csv"]),
+    (
+        f"az://{ACCT}.blob.core.windows.net/c/data/**",
+        f"az://{ACCT}.blob.core.windows.net/c/",
+        ["data/a.csv", "data/sub/b.csv", "data/sub/deep/c.csv"],
+    ),
 ]
 
 SETUP = """.output /dev/null
@@ -167,8 +181,13 @@ def literal(s):
 
 def duckdb(shell, extension, connection_string, sql):
     setup = SETUP.format(extension=extension, connection_string=connection_string)
-    proc = subprocess.run([shell, "-unsigned", "-csv", "-noheader", "-bail"], input=setup + sql,
-                          capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        [shell, "-unsigned", "-csv", "-noheader", "-bail"],
+        input=setup + sql,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     if proc.returncode != 0:
         return "ERROR " + proc.stderr.strip().splitlines()[0]
     return proc.stdout.strip()
@@ -179,8 +198,10 @@ def main():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mock)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     endpoint = f"http://127.0.0.1:{server.server_address[1]}/{ACCT}"
-    connection_string = (f"DefaultEndpointsProtocol=http;AccountName={ACCT};AccountKey=a2V5;"
-                         f"BlobEndpoint={endpoint};DfsEndpoint={endpoint}")
+    connection_string = (
+        f"DefaultEndpointsProtocol=http;AccountName={ACCT};AccountKey=a2V5;"
+        f"BlobEndpoint={endpoint};DfsEndpoint={endpoint}"
+    )
 
     checks = []
     for pattern, prefix, names in GLOBS:
@@ -194,8 +215,9 @@ def main():
         sql = f"SELECT count(*) FILTER (file NOT IN ({known})), count(*) FROM glob({literal(data_path + '**')});\n"
         checks.append((f"no orphans under {data_path}", sql, "0,2"))
     # the returned paths open
-    checks.append(("read_csv over a @ glob", f"SELECT sum(x), count(*) FROM read_csv({literal(AT + 'data/**')});\n",
-                   "6,3"))
+    checks.append(
+        ("read_csv over a @ glob", f"SELECT sum(x), count(*) FROM read_csv({literal(AT + 'data/**')});\n", "6,3")
+    )
 
     failures = 0
     for name, sql, want in checks:
