@@ -131,3 +131,22 @@ RESET azure_write_block_size;
 statement ok
 RESET azure_write_staged_blocks_per_commit;
 
+# HEAD advertises the object size, but only GET transfers its three-byte body.
+statement ok
+COPY (SELECT 42) TO 'az://{AZ_TEMP_DIR}/http-stats.csv' (FORMAT CSV, HEADER false);
+
+statement ok
+SET azure_http_stats = true;
+
+query II
+EXPLAIN ANALYZE SELECT size FROM read_blob('az://{AZ_TEMP_DIR}/http-stats.csv');
+----
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 0 bytes.*out\: 0 bytes.*\#HEAD\: [1-9][0-9]*.*GET\: 0.*PUT\: 0.*\#POST\: 0.*
+
+query II
+EXPLAIN ANALYZE SELECT content FROM read_text('az://{AZ_TEMP_DIR}/http-stats.csv');
+----
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: 3 bytes.*out\: 0 bytes.*\#HEAD\: [1-9][0-9]*.*GET\: 1.*PUT\: 0.*\#POST\: 0.*
+
+statement ok
+RESET azure_http_stats;
