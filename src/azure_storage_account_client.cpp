@@ -356,6 +356,10 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(const s
                                                                          const std::string &proxy_password) {
 	Azure::Core::Http::Policies::TransportOptions transport_options;
 	if (transport_option_type == "default") {
+#if !defined(_WIN32) && !defined(__APPLE__)
+		// The bundled curl can have a build-time CA path absent on the host; search common runtime locations.
+		transport_options.Transport = CreateCurlTransport(proxy, proxy_username, proxy_password);
+#else
 		if (!proxy.empty()) {
 			transport_options.HttpProxy = proxy;
 		}
@@ -367,6 +371,7 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(const s
 		if (!proxy_password.empty()) {
 			transport_options.ProxyPassword = proxy_password;
 		}
+#endif
 	} else if (transport_option_type == "curl") {
 		transport_options.Transport = CreateCurlTransport(proxy, proxy_username, proxy_password);
 	} else {
