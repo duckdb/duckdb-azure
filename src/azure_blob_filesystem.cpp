@@ -75,8 +75,10 @@ AzureBlobContextState::GetBlobContainerClient(const std::string &blobContainerNa
 //////// AzureBlobStorageFileHandle ////////
 AzureBlobStorageFileHandle::AzureBlobStorageFileHandle(AzureBlobStorageFileSystem &fs, const OpenFileInfo &info,
                                                        FileOpenFlags flags, const AzureOptions &opts,
+                                                       AzureMetadataCacheHandle metadata_cache,
                                                        Azure::Storage::Blobs::BlockBlobClient blob_client)
-    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, opts), blob_client(std::move(blob_client)) {
+    : AzureFileHandle(fs, info, flags, FileType::FILE_TYPE_INVALID, opts, std::move(metadata_cache)),
+      blob_client(std::move(blob_client)) {
 }
 
 void AzureBlobStorageFileHandle::StageWriteBuffer() {
@@ -94,6 +96,7 @@ void AzureBlobStorageFileHandle::Sync() {
 	if (!(flags.OpenForWriting() || flags.OpenForAppending())) {
 		return;
 	}
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		StageWriteBuffer();
 		if (staged_block_count == 0) {
@@ -117,10 +120,15 @@ void AzureBlobStorageFileHandle::Sync() {
 
 void AzureBlobStorageFileHandle::Close() {
 	Sync();
+	InvalidateMetadata();
 	DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 }
 
 //////// AzureBlobStorageFileSystem ////////
+AzureBlobStorageFileSystem::AzureBlobStorageFileSystem(shared_ptr<AzureMetadataCache> metadata_cache)
+    : AzureStorageFileSystem(std::move(metadata_cache)) {
+}
+
 unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                      optional_ptr<FileOpener> opener) {
 	if (!opener) {
@@ -140,9 +148,13 @@ unique_ptr<AzureFileHandle> AzureBlobStorageFileSystem::CreateHandle(const OpenF
 	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(parsed_url.container);
 	auto blob_client = container.GetBlockBlobClient(parsed_url.path);
+	auto metadata_cache = GetMetadataCache(opener, info.path, parsed_url, blob_client.GetUrl());
+	if (flags.OpenForWriting() || flags.OpenForAppending()) {
+		metadata_cache.Invalidate();
+	}
 
-	auto handle =
-	    make_uniq<AzureBlobStorageFileHandle>(*this, info, flags, storage_context->options, std::move(blob_client));
+	auto handle = make_uniq<AzureBlobStorageFileHandle>(*this, info, flags, storage_context->options,
+	                                                    std::move(metadata_cache), std::move(blob_client));
 	if (!handle->PostConstruct()) {
 		return nullptr;
 	}
@@ -165,7 +177,9 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 	auto first_wildcard_pos = azure_url.path.find_first_of("*[\\");
 	if (first_wildcard_pos == string::npos) {
 		vector<OpenFileInfo> rv;
-		if (FileExists(path, opener)) {
+		auto handle = OpenFile(path, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
+		// Returning directories here suppresses DuckDB's fallback auto-glob path for multi-file readers.
+		if (handle && handle->Cast<AzureBlobStorageFileHandle>().GetType() == FileType::FILE_TYPE_REGULAR) {
 			rv.emplace_back(path);
 		}
 		return rv;
@@ -207,10 +221,14 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 				OpenFileInfo info(result_full_url);
 				info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 				auto &options = info.extended_info->options;
+				// Zero-length entries may be HNS directories; leave their ETag unset to check the type on open.
+				if (key.BlobSize > 0) {
+					options.emplace("type", Value("file"));
+				}
 				options.emplace("file_size", Value::BIGINT(key.BlobSize));
 				options.emplace("last_modified", Value::TIMESTAMP(ToTimestamp(key.Details.LastModified)));
 				auto etag = StripETagQuotes(key.Details.ETag.ToString());
-				if (!etag.empty()) {
+				if (key.BlobSize > 0 && !etag.empty()) {
 					options.emplace("etag", Value(std::move(etag)));
 				}
 				result.push_back(info);
@@ -305,15 +323,12 @@ void AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	// - doesn't exist, don't create
 
 	auto set_props = [&](bool is_dir, idx_t length, timestamp_t last_mod, const string &etag) {
-		afh.is_remote_loaded = true; // always set loaded
-		afh.file_type = is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR;
-		afh.length = is_dir ? 0 : length;
-		afh.last_modified = last_mod;
-		afh.etag = StripETagQuotes(etag);
-		afh.file_offset = 0; // always reset offset state
+		afh.SetFileInfo(is_dir ? FileType::FILE_TYPE_DIR : FileType::FILE_TYPE_REGULAR, length, last_mod,
+		                StripETagQuotes(etag));
 	};
 
 	auto create_file = [&]() {
+		AzureMetadataCacheInvalidationGuard invalidation(afh.metadata_cache);
 		auto res_create = afh.blob_client.CommitBlockList({});
 		set_props(false, 0, ToTimestamp(res_create.Value.LastModified), res_create.Value.ETag.ToString());
 	};
@@ -390,6 +405,8 @@ void AzureBlobStorageFileSystem::RemoveFile(const string &filename, optional_ptr
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(url.container);
 	auto blob_client = container.GetBlockBlobClient(url.path);
+	auto metadata_cache = GetMetadataCache(opener, filename, url, blob_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	try {
 		blob_client.Delete();
 	} catch (Azure::Storage::StorageException &e) {
@@ -403,6 +420,8 @@ bool AzureBlobStorageFileSystem::TryRemoveFile(const string &filename, optional_
 	auto storage_context = GetOrCreateStorageContext(opener, filename, url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(url.container);
 	auto blob_client = container.GetBlockBlobClient(url.path);
+	auto metadata_cache = GetMetadataCache(opener, filename, url, blob_client.GetUrl());
+	AzureMetadataCacheInvalidationGuard invalidation(metadata_cache);
 	return blob_client.DeleteIfExists().Value.Deleted;
 }
 

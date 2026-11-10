@@ -9,8 +9,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Load filesystem
 	auto &instance = loader.GetDatabaseInstance();
 	auto &fs = instance.GetFileSystem();
-	fs.RegisterSubSystem(make_uniq<AzureBlobStorageFileSystem>());
-	fs.RegisterSubSystem(make_uniq<AzureDfsStorageFileSystem>());
+	auto metadata_cache = make_shared_ptr<AzureMetadataCache>(false);
+	fs.RegisterSubSystem(make_uniq<AzureBlobStorageFileSystem>(metadata_cache));
+	fs.RegisterSubSystem(make_uniq<AzureDfsStorageFileSystem>(metadata_cache));
 
 	// Load Secret functions
 	CreateAzureSecretFunctions::Register(loader);

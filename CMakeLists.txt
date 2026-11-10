@@ -53,6 +53,18 @@ target_include_directories(
   PRIVATE Azure::azure-identity Azure::azure-storage-blobs
           Azure::azure-storage-files-datalake)
 
+if(BUILD_UNITTESTS)
+  add_executable(azure_metadata_cache_test test/test_azure_metadata_cache.cpp)
+  target_include_directories(azure_metadata_cache_test
+                             PRIVATE "${CMAKE_SOURCE_DIR}/third_party/catch")
+  target_link_libraries(azure_metadata_cache_test ${EXTENSION_NAME}
+                        duckdb_static)
+  link_extension_libraries(azure_metadata_cache_test "")
+  set_target_properties(
+    azure_metadata_cache_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                         "${CMAKE_BINARY_DIR}/test")
+endif()
+
 install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"
