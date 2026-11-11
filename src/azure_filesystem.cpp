@@ -24,6 +24,18 @@ void AzureContextState::QueryEnd() {
 	is_valid = false;
 }
 
+void AzureContextState::QueryEnd(ClientContext &context) {
+	QueryEnd();
+	if (cache_key.empty()) {
+		return;
+	}
+	// Remove only this entry, not a newer one under the same key
+	auto &registered_state = *context.registered_state;
+	if (registered_state.Get<AzureContextState>(cache_key).get() == this) {
+		registered_state.Remove(cache_key);
+	}
+}
+
 AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo &info, FileOpenFlags flags,
                                  FileType file_type, const AzureOptions &options)
     : FileHandle(fs, info.path, flags), flags(flags),
@@ -207,9 +219,9 @@ int64_t AzureStorageFileSystem::Read(FileHandle &handle, void *buffer, int64_t n
 	return nr_bytes;
 }
 
-static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &path, const AzureParsedUrl &parsed) {
-	// context key == proto://{storage_account}{.}{endpoint}
-	// when storage account / endpoint unavailable, try to fetch via secret manager
+static string GetContextKeyPath(SecretMatch &secret_match, const AzureParsedUrl &parsed) {
+	// The account part of the context key: {storage_account}.{endpoint}, or whichever of the two is known.
+	// Taken from the URL when it is fully qualified, else from the secret; "" when neither is known.
 	string account;
 	string endpoint;
 
@@ -218,7 +230,6 @@ static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &p
 		endpoint = parsed.endpoint;
 	} else {
 		// no storage account? map it from the secret if possible
-		auto secret_match = LookupSecret(opener, path);
 		if (secret_match.HasMatch()) {
 			const auto &secret = dynamic_cast<const KeyValueSecret &>(secret_match.GetSecret());
 
@@ -245,6 +256,23 @@ static string GetContextKeyPath(optional_ptr<FileOpener> opener, const string &p
 	return has_account ? account : endpoint;
 }
 
+static string GetContextCredentialKey(SecretMatch &secret_match) {
+	if (!secret_match.HasMatch()) {
+		// Settings-based access (no secret), which may still be authenticated
+		return "no-secret";
+	}
+	auto &secret = secret_match.GetSecret();
+	return secret_match.secret_entry->storage_mode + "." + secret.GetName() + "/" + secret.GetProvider();
+}
+
+static idx_t CountContextStates(RegisteredStateManager &registered_state) {
+	idx_t count = 0;
+	for (auto &state : registered_state.States()) {
+		count += dynamic_cast<AzureContextState *>(state.get()) != nullptr;
+	}
+	return count;
+}
+
 shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(optional_ptr<FileOpener> opener,
                                                                                 const string &path,
                                                                                 const AzureParsedUrl &parsed_url) {
@@ -255,20 +283,27 @@ shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(
 	}
 	auto client_context = FileOpener::TryGetClientContext(opener);
 
-	shared_ptr<AzureContextState> result;
 	if (azure_context_caching && client_context) {
-		string key_path = GetContextKeyPath(opener, path, parsed_url);
+		auto secret_match = LookupSecret(opener, path);
+		string key_path = GetContextKeyPath(secret_match, parsed_url);
 		auto &registered_state = client_context->registered_state;
 
 		// Ok, now use account in key, or otherwise skip the cache
 		if (!key_path.empty()) {
-			auto context_key = GetContextPrefix() + key_path;
-			result = registered_state->Get<AzureContextState>(context_key);
-			if (!result || !result->IsValid()) {
-				result = CreateStorageContext(opener, path, parsed_url);
-				registered_state->Insert(context_key, result);
+			// A client built for another secret (or none) on the same account must not serve this path
+			auto context_key = GetContextPrefix() + key_path + "#" + GetContextCredentialKey(secret_match);
+			auto result = registered_state->Get<AzureContextState>(context_key);
+			if (result && result->IsValid()) {
 				return result;
 			}
+			result = CreateStorageContext(opener, path, parsed_url);
+			result->cache_key = context_key;
+			// Insert keeps an existing entry; an invalid one is normally removed at its query's end already
+			registered_state->Remove(context_key);
+			registered_state->Insert(context_key, result);
+			DUCKDB_LOG_DEBUG(*client_context, StringUtil::Format("azure context cache: %llu entries after adding %s",
+			                                                     CountContextStates(*registered_state), context_key));
+			return result;
 		}
 	}
 

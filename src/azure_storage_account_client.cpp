@@ -193,10 +193,16 @@ ToDfsClientOptions(const Azure::Core::Http::Policies::TransportOptions &transpor
 	return ToClientOptions<Azure::Storage::Files::DataLake::DataLakeClientOptions>(transport_options, opener);
 }
 
+// Token endpoints (IMDS in particular) throttle with 429, which the SDK does not retry by default
+static void AddTokenRetryStatusCodes(Azure::Core::Credentials::TokenCredentialOptions &options) {
+	options.Retry.StatusCodes.insert(Azure::Core::Http::HttpStatusCode::TooManyRequests);
+}
+
 static Azure::Core::Credentials::TokenCredentialOptions
 ToTokenCredentialOptions(const Azure::Core::Http::Policies::TransportOptions &transport_options) {
 	Azure::Core::Credentials::TokenCredentialOptions options;
 	options.Transport = transport_options;
+	AddTokenRetryStatusCodes(options);
 	return options;
 }
 
@@ -499,6 +505,7 @@ GetManagedIdentityCredential(optional_ptr<FileOpener> opener, const KeyValueSecr
 	using namespace Azure::Identity;
 
 	ManagedIdentityCredentialOptions mi_cred_options;
+	AddTokenRetryStatusCodes(mi_cred_options);
 
 	auto client_id = secret.TryGetValue("client_id");
 	auto object_id = secret.TryGetValue("object_id");
