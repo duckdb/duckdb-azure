@@ -124,12 +124,13 @@ endloop
 statement ok
 SET azure_http_stats = true;
 
+# The glob's listing gives each file's size, last-modified time and etag, so opening the files sends no HEAD
 query II
 EXPLAIN ANALYZE SELECT count(*) FROM 'abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: [34].*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 0.*GET\: [34].*PUT\: 0.*\#POST\: 0.*
 
 query II
 EXPLAIN ANALYZE SELECT count(*) FROM 'abfs://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=*7/l_shipmode=TRUCK/*.csv';
 ----
-analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 1.*GET\: [34].*PUT\: 0.*\#POST\: 0.*
+analyzed_plan	<REGEX>:.*HTTP Stats.*in\: [\d.]* KiB.*\#HEAD\: 0.*GET\: [34].*PUT\: 0.*\#POST\: 0.*
