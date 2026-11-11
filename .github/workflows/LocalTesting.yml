@@ -82,6 +82,10 @@ jobs:
         run: |
           python3 test/dfs_mock/check_glob_spelling.py ./build/release/duckdb ./build/release/extension/azure/azure.duckdb_extension
 
+      - name: Count token requests
+        run: |
+          python3 test/token_requests/check_token_requests.py ./build/release/duckdb ./build/release/extension/azure/azure.duckdb_extension
+
       - name: Azure test server log
         if: always()
         shell: bash
