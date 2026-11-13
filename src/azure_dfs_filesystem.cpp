@@ -150,6 +150,12 @@ void AzureDfsStorageFileHandle::Close() {
 //////// AzureDfsStorageFileSystem ////////
 unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
+	return CreateHandle(info, flags, opener, info.path);
+}
+
+unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
+                                                                    optional_ptr<FileOpener> opener,
+                                                                    const string &secret_path) {
 	if (!opener) {
 		throw InternalException("Unsupported(INTERNAL): cannot create an Azure file Handle without FileOpener");
 	}
@@ -164,7 +170,7 @@ unique_ptr<AzureFileHandle> AzureDfsStorageFileSystem::CreateHandle(const OpenFi
 	}
 
 	auto parsed_url = ParseUrl(info.path);
-	auto storage_context = GetOrCreateStorageContext(opener, info.path, parsed_url);
+	auto storage_context = GetOrCreateStorageContext(opener, secret_path, parsed_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(parsed_url.container);
 
 	// A trailing '/' is only a directory hint, not part of the resource name. Some DFS endpoints (e.g. OneLake)
@@ -187,8 +193,16 @@ bool AzureDfsStorageFileSystem::CanHandleFile(const string &fpath) {
 }
 
 bool AzureDfsStorageFileSystem::DirectoryExists(const string &dirname, optional_ptr<FileOpener> opener) {
-	auto handle = OpenFile(dirname, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
-	return handle && handle->Cast<AzureDfsStorageFileHandle>().GetType() == FileType::FILE_TYPE_DIR;
+	// Not OpenFile: a trailing '/' on the handle's path would make LoadRemoteFileInfo report a file as a directory,
+	// so only the secret lookup uses '<dir>/'
+	auto handle =
+	    CreateHandle(OpenFileInfo(dirname), FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener, AsDirectoryPath(dirname));
+	if (!handle) {
+		return false;
+	}
+	handle->TryAddLogger(*opener);
+	DUCKDB_LOG_FILE_SYSTEM_OPEN((*handle));
+	return handle->GetType() == FileType::FILE_TYPE_DIR;
 }
 
 void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_ptr<FileOpener> opener) {
@@ -196,7 +210,7 @@ void AzureDfsStorageFileSystem::CreateDirectory(const string &dirname, optional_
 		throw InternalException("Unsupported(INTERNAL): cannot create an Azure directory without FileOpener");
 	}
 	auto dir_url = ParseUrl(dirname);
-	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
+	auto storage_context = GetOrCreateStorageContext(opener, AsDirectoryPath(dirname), dir_url);
 	auto file_system_client = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(dir_url.container);
 	file_system_client.GetDirectoryClient(dir_url.path).Create();
 }
@@ -281,9 +295,8 @@ bool AzureDfsStorageFileSystem::ListFilesExtended(const string &path_in,
 	if (path_in.find('*') != string::npos) {
 		throw InvalidInputException("ListFiles does not support globs");
 	}
-	// Normalize: to end with '/' so it's a clear dir prefix
 	auto url = ParseUrl(path_in);
-	auto storage_context = GetOrCreateStorageContext(opener, path_in, url);
+	auto storage_context = GetOrCreateStorageContext(opener, AsDirectoryPath(path_in), url);
 	auto fs = storage_context->As<AzureDfsContextState>().GetDfsFileSystemClient(url.container);
 	auto dir_client = fs.GetDirectoryClient(url.path);
 

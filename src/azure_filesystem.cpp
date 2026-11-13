@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/shared_ptr.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/logging/log_manager.hpp"
@@ -273,6 +274,10 @@ shared_ptr<AzureContextState> AzureStorageFileSystem::GetOrCreateStorageContext(
 	}
 
 	return CreateStorageContext(opener, path, parsed_url);
+}
+
+string AzureStorageFileSystem::AsDirectoryPath(const string &path) {
+	return StringUtil::EndsWith(path, "/") ? path : path + "/";
 }
 
 AzureOptions AzureStorageFileSystem::ParseAzureOptions(optional_ptr<FileOpener> opener) {

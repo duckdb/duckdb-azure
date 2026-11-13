@@ -1,5 +1,5 @@
 # name: test/sql/azure_directory_scope.test
-# description: a secret scoped to a directory ('<dir>/') is also used for the directory path itself
+# description: a secret scoped to '<dir>/' covers operations on the directory itself, not file operations on '<dir>'
 # group: [sql]
 
 require azure
@@ -69,12 +69,12 @@ COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory
 ----
 Unexpected end of Base64 encoded string
 
-# A plain read of a blob named like the directory also resolves to the '<dir>/' secret: the lookup appends the
-# slash for every path, and a flat namespace can hold the blob 'dir' next to the blobs under 'dir/'
+# A flat namespace can hold a blob 'dir' next to the blobs under 'dir/': reading that blob is a file operation,
+# so it keeps the parent scope
 statement error
 SELECT * FROM read_csv('azure://dirscopefake.blob.core.windows.net/c/directory_scope/dir', columns = {'id': 'INTEGER'});
 ----
-<REGEX>:.*[Ii]nvalid.*connection string.*
+Unexpected end of Base64 encoded string
 
 statement ok
 DROP SECRET prefix_scope
@@ -145,6 +145,12 @@ COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_
 ----
 Unexpected end of Base64 encoded string
 
+# Reading a file 'dir' is a file operation and keeps the parent scope
+statement error
+SELECT * FROM read_csv('abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/dir', columns = {'id': 'INTEGER'});
+----
+Unexpected end of Base64 encoded string
+
 statement ok
 DROP SECRET prefix_scope
 
@@ -189,3 +195,32 @@ DROP SECRET dir_scope
 
 statement ok
 DROP SECRET parent_scope
+
+# -----------------------------------------------------------------------------
+# Container root: a container path without the trailing slash resolves to the secret scoped to '<container>/'
+#
+
+statement ok
+CREATE SECRET account_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/',
+    CONNECTION_STRING 'AccountName=dirscopefake;AccountKey=not-base64-!!!'
+)
+
+statement ok
+CREATE SECRET container_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/c/',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+statement ok
+DROP SECRET container_scope
+
+statement ok
+DROP SECRET account_scope

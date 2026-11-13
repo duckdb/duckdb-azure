@@ -699,9 +699,7 @@ const SecretMatch LookupSecret(optional_ptr<FileOpener> opener, const std::strin
 	auto transaction = FileOpener::TryGetCatalogTransaction(opener);
 
 	if (secret_manager && transaction) {
-		// Scopes match by prefix: let a directory path also match a scope '<path>/'
-		const auto lookup_path = (!path.empty() && path.back() != '/') ? path + "/" : path;
-		return secret_manager->LookupSecret(*transaction, lookup_path, "azure");
+		return secret_manager->LookupSecret(*transaction, path, "azure");
 	}
 
 	return {};
