@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -357,6 +358,32 @@ string AzureStorageFileSystem::StripETagQuotes(string etag) {
 		return etag.substr(1, etag.size() - 2);
 	}
 	return etag;
+}
+
+// taken from s3fs.cpp TODO: deduplicate!
+bool AzureStorageFileSystem::MatchGlob(vector<string>::const_iterator key, vector<string>::const_iterator key_end,
+                                       vector<string>::const_iterator pattern,
+                                       vector<string>::const_iterator pattern_end) {
+	while (key != key_end && pattern != pattern_end) {
+		if (*pattern == "**") {
+			if (std::next(pattern) == pattern_end) {
+				return true;
+			}
+			while (key != key_end) {
+				if (MatchGlob(key, key_end, std::next(pattern), pattern_end)) {
+					return true;
+				}
+				key++;
+			}
+			return false;
+		}
+		if (!duckdb::Glob(key->data(), key->length(), pattern->data(), pattern->length())) {
+			return false;
+		}
+		key++;
+		pattern++;
+	}
+	return key == key_end && pattern == pattern_end;
 }
 
 } // namespace duckdb

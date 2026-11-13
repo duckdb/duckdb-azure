@@ -9,7 +9,6 @@
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -35,31 +34,6 @@ const string AzureBlobStorageFileSystem::SHORT_SCHEME = "az";
 
 const string AzureBlobStorageFileSystem::PATH_PREFIX = "azure://";
 const string AzureBlobStorageFileSystem::SHORT_PATH_PREFIX = "az://";
-
-// taken from s3fs.cpp TODO: deduplicate!
-static bool Match(vector<string>::const_iterator key, vector<string>::const_iterator key_end,
-                  vector<string>::const_iterator pattern, vector<string>::const_iterator pattern_end) {
-	while (key != key_end && pattern != pattern_end) {
-		if (*pattern == "**") {
-			if (std::next(pattern) == pattern_end) {
-				return true;
-			}
-			while (key != key_end) {
-				if (Match(key, key_end, std::next(pattern), pattern_end)) {
-					return true;
-				}
-				key++;
-			}
-			return false;
-		}
-		if (!Glob(key->data(), key->length(), pattern->data(), pattern->length())) {
-			return false;
-		}
-		key++;
-		pattern++;
-	}
-	return key == key_end && pattern == pattern_end;
-}
 
 //////// AzureBlobContextState ////////
 AzureBlobContextState::AzureBlobContextState(Azure::Storage::Blobs::BlobServiceClient client,
@@ -200,7 +174,8 @@ vector<OpenFileInfo> AzureBlobStorageFileSystem::Glob(const string &path, FileOp
 		// Ensure that the retrieved element match the expected pattern
 		for (const auto &key : res.Blobs) {
 			vector<string> key_splits = StringUtil::Split(key.Name, "/");
-			bool is_match = Match(key_splits.begin(), key_splits.end(), pattern_splits.begin(), pattern_splits.end());
+			bool is_match =
+			    MatchGlob(key_splits.begin(), key_splits.end(), pattern_splits.begin(), pattern_splits.end());
 
 			if (is_match) {
 				auto result_full_url = path_result_prefix + '/' + key.Name;

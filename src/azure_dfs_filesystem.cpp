@@ -35,41 +35,39 @@ inline static bool IsDfsScheme(const string &fpath) {
 	       fpath.rfind(AzureDfsStorageFileSystem::UNSECURE_PATH_PREFIX, 0) == 0;
 }
 
-static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient &fs, const std::string &path,
-                 const string &path_pattern, std::size_t end_match, std::vector<OpenFileInfo> *out_result) {
+static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient &fs, const string &path,
+                 const vector<string> &pattern_splits, idx_t pattern_index, vector<OpenFileInfo> &out_result) {
+	D_ASSERT(pattern_index < pattern_splits.size());
 	auto directory_client = fs.GetDirectoryClient(path);
-
-	bool recursive = false;
-	const auto double_star = path_pattern.rfind("**", end_match);
-	if (double_star != std::string::npos) {
-		if (path_pattern.length() > end_match) {
-			throw NotImplementedException("abfss do not manage recursive lookup patterns, %s is therefor illegal, only "
-			                              "pattern ending by ** are allowed.",
-			                              path_pattern);
-		}
-		// pattern end with a **, perform recursive listing from this point
-		recursive = true;
-	}
+	const auto &pattern = pattern_splits[pattern_index];
+	const bool recursive = pattern == "**";
 
 	Azure::Storage::Files::DataLake::ListPathsOptions options;
 	while (true) {
-		auto res = directory_client.ListPaths(recursive, options);
+		Azure::Storage::Files::DataLake::ListPathsPagedResponse res;
+		try {
+			res = directory_client.ListPaths(recursive, options);
+		} catch (const Azure::Storage::StorageException &e) {
+			if (e.ErrorCode == "PathNotFound") {
+				return;
+			}
+			throw;
+		}
 
 		for (const auto &elt : res.Paths) {
 			if (elt.IsDirectory) {
-				if (!recursive) { // Only perform recursive call if we are not already processing recursive result
-					if (Glob(elt.Name.data(), elt.Name.length(), path_pattern.data(), end_match)) {
-						if (end_match >= path_pattern.length()) {
-							// Skip, no way there will be matches anymore
-							continue;
-						}
-						Walk(fs, elt.Name, path_pattern,
-						     std::min(path_pattern.length(), path_pattern.find('/', end_match + 1)), out_result);
+				if (!recursive && pattern_index + 1 < pattern_splits.size()) {
+					const auto separator = elt.Name.rfind('/');
+					const auto name_start = separator == string::npos ? 0 : separator + 1;
+					if (Glob(elt.Name.data() + name_start, elt.Name.length() - name_start, pattern.data(),
+					         pattern.length())) {
+						Walk(fs, elt.Name, pattern_splits, pattern_index + 1, out_result);
 					}
 				}
 			} else {
-				// File
-				if (Glob(elt.Name.data(), elt.Name.length(), path_pattern.data(), path_pattern.length())) {
+				const auto key_splits = StringUtil::Split(elt.Name, "/");
+				if (AzureStorageFileSystem::MatchGlob(key_splits.begin(), key_splits.end(), pattern_splits.begin(),
+				                                      pattern_splits.end())) {
 					OpenFileInfo info(elt.Name);
 					info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 					auto &options = info.extended_info->options;
@@ -80,7 +78,7 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 					if (!etag.empty()) {
 						options.emplace("etag", Value(std::move(etag)));
 					}
-					out_result->push_back(info);
+					out_result.push_back(info);
 				}
 			}
 		}
@@ -248,18 +246,21 @@ vector<OpenFileInfo> AzureDfsStorageFileSystem::Glob(const string &path, FileOpe
 	auto dfs_storage_service = ConnectToDfsStorageAccount(opener, path, azure_url);
 	auto dfs_filesystem_client = dfs_storage_service.GetFileSystemClient(azure_url.container);
 
-	auto index_root_dir = azure_url.path.rfind('/', first_wildcard_pos);
-	if (index_root_dir == string::npos) {
-		index_root_dir = 0;
+	const auto pattern_splits = StringUtil::Split(azure_url.path, "/");
+	idx_t pattern_index = 0;
+	string shared_path;
+	for (const auto &part : pattern_splits) {
+		if (part.find_first_of("*[\\") != string::npos) {
+			break;
+		}
+		if (!shared_path.empty()) {
+			shared_path += '/';
+		}
+		shared_path += part;
+		pattern_index++;
 	}
-	auto shared_path = azure_url.path.substr(0, index_root_dir);
-
-	std::vector<OpenFileInfo> result;
-	Walk(dfs_filesystem_client, shared_path,
-	     // pattern to match
-	     azure_url.path, std::min(azure_url.path.length(), azure_url.path.find('/', index_root_dir + 1)),
-	     // output result
-	     &result);
+	vector<OpenFileInfo> result;
+	Walk(dfs_filesystem_client, shared_path, pattern_splits, pattern_index, result);
 
 	if (!result.empty()) {
 		// the results keep the form of the pattern, <container>@<account>.<endpoint>/ or
