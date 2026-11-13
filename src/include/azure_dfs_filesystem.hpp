@@ -87,6 +87,9 @@ protected:
 	                                                   const AzureParsedUrl &parsed_url) override;
 	unique_ptr<AzureFileHandle> CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
 	                                         optional_ptr<FileOpener> opener) override;
+	// As CreateHandle, with the secret looked up for secret_path instead of info.path
+	unique_ptr<AzureFileHandle> CreateHandle(const OpenFileInfo &info, FileOpenFlags flags,
+	                                         optional_ptr<FileOpener> opener, const string &secret_path);
 
 	void ReadRange(AzureFileHandle &handle, idx_t file_offset, char *buffer_out, idx_t buffer_out_len) override;
 };

@@ -1,0 +1,226 @@
+# name: test/sql/azure_directory_scope.test
+# description: a secret scoped to '<dir>/' covers operations on the directory itself, not file operations on '<dir>'
+# group: [sql]
+
+require azure
+
+# Each secret fails before a request goes out (the connection string does not parse, or the account key is not
+# base64), so the error names the secret a path resolved to: 'invalid connection string' for the directory and
+# prefix scopes, 'Unexpected end of Base64 encoded string' for the parent scope. COPY with PER_THREAD_OUTPUT checks
+# the directory path itself first.
+
+# -----------------------------------------------------------------------------
+# Blob (azure://)
+#
+
+statement ok
+CREATE SECRET parent_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/',
+    CONNECTION_STRING 'AccountName=dirscopefake;AccountKey=not-base64-!!!'
+)
+
+statement ok
+CREATE SECRET dir_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/dir/',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+statement ok
+CREATE SECRET prefix_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/my-pa',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+# The directory path itself, without the trailing slash, resolves to the secret scoped to '<dir>/'
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/dir' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# Paths below the directory still resolve to it
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/dir/sub' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# A sibling that only shares the prefix does not match a scope that ends in '/'
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/dir-other' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+# A scope without a trailing slash stays a plain prefix match
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/my-path' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/my-pal' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# A path outside every directory scope falls back to the parent scope
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c/directory_scope/elsewhere' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+# A flat namespace can hold a blob 'dir' next to the blobs under 'dir/': reading that blob is a file operation,
+# so it keeps the parent scope
+statement error
+SELECT * FROM read_csv('azure://dirscopefake.blob.core.windows.net/c/directory_scope/dir', columns = {'id': 'INTEGER'});
+----
+Unexpected end of Base64 encoded string
+
+statement ok
+DROP SECRET prefix_scope
+
+statement ok
+DROP SECRET dir_scope
+
+statement ok
+DROP SECRET parent_scope
+
+# -----------------------------------------------------------------------------
+# DFS (abfss://)
+#
+
+statement ok
+CREATE SECRET parent_scope (
+    TYPE AZURE,
+    SCOPE 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/',
+    CONNECTION_STRING 'AccountName=dirscopefake;AccountKey=not-base64-!!!'
+)
+
+statement ok
+CREATE SECRET dir_scope (
+    TYPE AZURE,
+    SCOPE 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/dir/',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+statement ok
+CREATE SECRET prefix_scope (
+    TYPE AZURE,
+    SCOPE 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/my-pa',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+# The directory path itself, without the trailing slash, resolves to the secret scoped to '<dir>/'
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/dir' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# Paths below the directory still resolve to it
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/dir/sub' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# A sibling that only shares the prefix does not match a scope that ends in '/'
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/dir-other' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+# A scope without a trailing slash stays a plain prefix match
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/my-path' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/my-pal' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# A path outside every directory scope falls back to the parent scope
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/elsewhere' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+# Reading a file 'dir' is a file operation and keeps the parent scope
+statement error
+SELECT * FROM read_csv('abfss://dirscopefake.dfs.core.windows.net/c/directory_scope/dir', columns = {'id': 'INTEGER'});
+----
+Unexpected end of Base64 encoded string
+
+statement ok
+DROP SECRET prefix_scope
+
+statement ok
+DROP SECRET dir_scope
+
+statement ok
+DROP SECRET parent_scope
+
+# -----------------------------------------------------------------------------
+# DFS, <container>@<account> spelling (abfss://c@<account>.dfs.core.windows.net/...)
+#
+
+statement ok
+CREATE SECRET parent_scope (
+    TYPE AZURE,
+    SCOPE 'abfss://c@dirscopefake.dfs.core.windows.net/directory_scope/',
+    CONNECTION_STRING 'AccountName=dirscopefake;AccountKey=not-base64-!!!'
+)
+
+statement ok
+CREATE SECRET dir_scope (
+    TYPE AZURE,
+    SCOPE 'abfss://c@dirscopefake.dfs.core.windows.net/directory_scope/dir/',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+# The directory path itself, without the trailing slash, resolves to the secret scoped to '<dir>/'
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://c@dirscopefake.dfs.core.windows.net/directory_scope/dir' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+# A sibling that only shares the prefix does not match a scope that ends in '/'
+statement error
+COPY (SELECT 1 AS id) TO 'abfss://c@dirscopefake.dfs.core.windows.net/directory_scope/dir-other' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+Unexpected end of Base64 encoded string
+
+statement ok
+DROP SECRET dir_scope
+
+statement ok
+DROP SECRET parent_scope
+
+# -----------------------------------------------------------------------------
+# Container root: a container path without the trailing slash resolves to the secret scoped to '<container>/'
+#
+
+statement ok
+CREATE SECRET account_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/',
+    CONNECTION_STRING 'AccountName=dirscopefake;AccountKey=not-base64-!!!'
+)
+
+statement ok
+CREATE SECRET container_scope (
+    TYPE AZURE,
+    SCOPE 'azure://dirscopefake.blob.core.windows.net/c/',
+    CONNECTION_STRING 'INVALID CONNECTION STRING'
+)
+
+statement error
+COPY (SELECT 1 AS id) TO 'azure://dirscopefake.blob.core.windows.net/c' (FORMAT csv, PER_THREAD_OUTPUT);
+----
+<REGEX>:.*[Ii]nvalid.*connection string.*
+
+statement ok
+DROP SECRET container_scope
+
+statement ok
+DROP SECRET account_scope
