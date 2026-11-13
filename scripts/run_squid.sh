@@ -4,11 +4,13 @@ help() {
     echo "Usage: ${0} [port] [auth]"
     echo "  port    Port number for squid to lisen to (by default 3128)"
     echo "  auth    Optional string ('auth') to force user basic authentification (autherwise no authentification is required)"
+    echo "  --development-storage    Forward default-port Azurite shortcut requests to port 28000"
     exit 0
 }
 
 port='3128'
 auth='false'
+development_storage='false'
 log_dir="squid_logs"
 conf_file="squid.conf"
 pid_file='${service_name}.pid'
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       shift # past value
       ;;
+    --development-storage)
+      development_storage='true'
+      shift # past argument
+      ;;
     *)
       echo "Unknown option ${1}"
       exit 1
@@ -53,6 +59,16 @@ echo "logfile_daemon ${log_dir}/daemon.log"        >>"${conf_file}"
 echo "access_log ${log_dir}/access.log"            >>"${conf_file}"
 echo "cache_log ${log_dir}/cache.log"              >>"${conf_file}"
 echo "cache_store_log ${log_dir}/cache_store.log"  >>"${conf_file}"
+
+if [[ "${development_storage}" == "true" ]]; then
+    # Preserve the shortcut URL while forwarding only its fixture requests to the isolated Azurite port.
+    echo 'acl development_storage url_regex ^http://127[.]0[.]0[.]1:10000/devstoreaccount1(/|[?]|$)' >>"${conf_file}"
+    echo 'cache_peer 127.0.0.1 parent 28000 0 no-query originserver login=PASSTHRU name=development_storage' >>"${conf_file}"
+    echo 'cache_peer_access development_storage allow development_storage' >>"${conf_file}"
+    echo 'cache_peer_access development_storage deny all' >>"${conf_file}"
+    echo 'never_direct allow development_storage' >>"${conf_file}"
+    echo 'cache deny development_storage' >>"${conf_file}"
+fi
 
 
 if [[ "${auth}" == "true" ]]; then

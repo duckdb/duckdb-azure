@@ -41,6 +41,26 @@ CREATE SECRET secret2 (
 );
 ```
 
+Connection strings support shared keys, SAS tokens, explicit service endpoints,
+sovereign-cloud endpoint suffixes, and the Azurite shortcut
+`UseDevelopmentStorage=true`. Setting names are case-insensitive. `AccountName`
+is required for shared-key authentication and for generating default endpoints,
+but not when an explicit endpoint is used with a SAS token or anonymous access:
+
+```sql
+CREATE SECRET sas_secret (
+    TYPE AZURE,
+    CONNECTION_STRING 'BlobEndpoint=https://myaccount.blob.core.windows.net;SharedAccessSignature=<sas-token>'
+);
+```
+
+For Data Lake storage, specify `DfsEndpoint` or an `AccountName` from which the
+SDK can generate the DFS endpoint. A fully qualified DuckDB path must match the
+connection string's account name, or its service endpoint when `AccountName` is
+omitted. Connection-string endpoints take precedence over endpoints in DuckDB
+paths. The legacy `azure_storage_connection_string` setting supports the same
+formats for Blob storage; use secrets for Data Lake connection strings.
+
 ### Service Principal
 
 (replace `CLIENT_SECRET` with `CLIENT_CERTIFICATE_PATH` to use a client certificate)
