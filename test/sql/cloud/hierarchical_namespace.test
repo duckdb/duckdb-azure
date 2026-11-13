@@ -29,6 +29,26 @@ CREATE SECRET spn (
     ACCOUNT_NAME '{ABFSS_STORAGE_ACCOUNT}'
 );
 
+# Redundant separators must not shift the pattern index or directory-name offset.
+foreach separator /// //
+
+query I
+SELECT file FROM glob('abfss://{ABFSS_DATA_DIR}{separator}*.parquet');
+----
+abfss://{ABFSS_DATA_DIR}/l.parquet
+
+query I
+SELECT count(*) FROM glob('abfss://{ABFSS_DATA_DIR}{separator}partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv');
+----
+2
+
+query I
+SELECT count(*) FROM glob('abfss://{ABFSS_DATA_DIR}{separator}partitio*/l_receipmonth=*/l_shipmode=TRUCK/*.csv');
+----
+2
+
+endloop
+
 # Check that with Azure ADLS GEN2 directories are not show in globs
 query I
 SELECT file FROM glob('abfss://{ABFSS_DATA_DIR}/**') ORDER BY file;
@@ -45,10 +65,17 @@ abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.c
 abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
 # Check data integrity for Azure ADLS GEN2 storage account
-statement error
+query I
 SELECT file FROM glob('abfss://{ABFSS_DATA_DIR}/**/*.csv') ORDER BY file;
 ----
-<REGEX>:.*Not implemented Error:.*abfss.*recursive lookup patterns.*
+abfss://{ABFSS_DATA_DIR}/l.csv
+abfss://{ABFSS_DATA_DIR}/lineitem.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
+abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
 
 query I
 SELECT count(*) FROM 'abfss://{ABFSS_DATA_DIR}/partitioned/l_receipmonth=*/l_shipmode=TRUCK/*.csv';
@@ -94,6 +121,37 @@ SELECT count(*) FROM read_csv(
 );
 ----
 2317
+
+statement ok
+SET VARIABLE container_at_account = '{proto}' || parse_dirname('{ABFSS_DATA_DIR}') || '@{ABFSS_STORAGE_ACCOUNT}.dfs.core.windows.net/'
+  || array_to_string(parse_path('{ABFSS_DATA_DIR}')[2:], '/') || '/';
+
+# The results of a glob keep the <container>@<account> form of its pattern
+query I
+SELECT replace(file, getvariable('container_at_account'), '')
+FROM glob(getvariable('container_at_account') || 'partitioned/**') ORDER BY file;
+----
+partitioned/l_receipmonth=1997/l_shipmode=AIR/data_0.csv
+partitioned/l_receipmonth=1997/l_shipmode=SHIP/data_0.csv
+partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv
+partitioned/l_receipmonth=1998/l_shipmode=AIR/data_0.csv
+partitioned/l_receipmonth=1998/l_shipmode=SHIP/data_0.csv
+partitioned/l_receipmonth=1998/l_shipmode=TRUCK/data_0.csv
+
+# ... also for a single-directory pattern; a path built from the prefix compares equal
+query I
+SELECT file = getvariable('container_at_account') || 'partitioned/l_receipmonth=1997/l_shipmode=TRUCK/data_0.csv'
+FROM glob(getvariable('container_at_account') || 'partitioned/l_receipmonth=1997/l_shipmode=TRUCK/*.csv');
+----
+true
+
+query I
+SELECT count(*) FROM read_csv(
+  '{proto}' || parse_dirname('{ABFSS_DATA_DIR}') || '@{ABFSS_STORAGE_ACCOUNT}.dfs.core.windows.net/'
+  || array_to_string(parse_path('{ABFSS_DATA_DIR}')[2:], '/') || '/partitioned/**/*.csv'
+);
+----
+6936
 
 endloop
 

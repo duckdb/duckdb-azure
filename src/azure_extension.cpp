@@ -57,7 +57,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("azure_transport_option_type",
 	                          "Underlying adapter to use with the Azure SDK. Read more about the adapter at "
 	                          "https://github.com/Azure/azure-sdk-for-cpp/blob/main/doc/HttpTransportAdapter.md. Valid "
-	                          "values are: default, curl",
+	                          "values are: default, curl. On Linux both use curl and look up the system CA bundle.",
 	                          LogicalType::VARCHAR, "default");
 
 	AzureOptions default_options;

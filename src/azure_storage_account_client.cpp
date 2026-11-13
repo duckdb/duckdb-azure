@@ -193,10 +193,16 @@ ToDfsClientOptions(const Azure::Core::Http::Policies::TransportOptions &transpor
 	return ToClientOptions<Azure::Storage::Files::DataLake::DataLakeClientOptions>(transport_options, opener);
 }
 
+// Token endpoints (IMDS in particular) throttle with 429, which the SDK does not retry by default
+static void AddTokenRetryStatusCodes(Azure::Core::Credentials::TokenCredentialOptions &options) {
+	options.Retry.StatusCodes.insert(Azure::Core::Http::HttpStatusCode::TooManyRequests);
+}
+
 static Azure::Core::Credentials::TokenCredentialOptions
 ToTokenCredentialOptions(const Azure::Core::Http::Policies::TransportOptions &transport_options) {
 	Azure::Core::Credentials::TokenCredentialOptions options;
 	options.Transport = transport_options;
+	AddTokenRetryStatusCodes(options);
 	return options;
 }
 
@@ -356,6 +362,10 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(const s
                                                                          const std::string &proxy_password) {
 	Azure::Core::Http::Policies::TransportOptions transport_options;
 	if (transport_option_type == "default") {
+#if !defined(_WIN32) && !defined(__APPLE__)
+		// The bundled curl can have a build-time CA path absent on the host; search common runtime locations.
+		transport_options.Transport = CreateCurlTransport(proxy, proxy_username, proxy_password);
+#else
 		if (!proxy.empty()) {
 			transport_options.HttpProxy = proxy;
 		}
@@ -367,6 +377,7 @@ static Azure::Core::Http::Policies::TransportOptions GetTransportOptions(const s
 		if (!proxy_password.empty()) {
 			transport_options.ProxyPassword = proxy_password;
 		}
+#endif
 	} else if (transport_option_type == "curl") {
 		transport_options.Transport = CreateCurlTransport(proxy, proxy_username, proxy_password);
 	} else {
@@ -494,6 +505,7 @@ GetManagedIdentityCredential(optional_ptr<FileOpener> opener, const KeyValueSecr
 	using namespace Azure::Identity;
 
 	ManagedIdentityCredentialOptions mi_cred_options;
+	AddTokenRetryStatusCodes(mi_cred_options);
 
 	auto client_id = secret.TryGetValue("client_id");
 	auto object_id = secret.TryGetValue("object_id");

@@ -8,7 +8,7 @@ defaults:
     shell: bash
 
 env:
-  VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
+  VCPKG_COMMIT_ID: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
 
 jobs:
   azurite-tests-linux:
@@ -77,6 +77,14 @@ jobs:
         run: |
           ./build/release/duckdb -c "CREATE PERSISTENT SECRET s1 (TYPE AZURE, CONNECTION_STRING '$AZURE_STORAGE_CONNECTION_STRING')"
           DUCKDB_AZURE_PERSISTENT_SECRET_AVAILABLE=1 scripts/env_azurite ./build/release/test/unittest "*test/sql/test_data_integrity.test"
+
+      - name: DFS glob spelling (DFS mock)
+        run: |
+          python3 test/dfs_mock/check_glob_spelling.py ./build/release/duckdb ./build/release/extension/azure/azure.duckdb_extension
+
+      - name: Count token requests
+        run: |
+          python3 test/token_requests/check_token_requests.py ./build/release/duckdb ./build/release/extension/azure/azure.duckdb_extension
 
       - name: Azure test server log
         if: always()

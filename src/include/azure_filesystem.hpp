@@ -33,7 +33,10 @@ public:
 
 public:
 	virtual bool IsValid() const;
+	using ClientContextState::QueryEnd;
 	void QueryEnd() override;
+	//! Also removes this state from the connection's cache: it cannot be used after its query
+	void QueryEnd(ClientContext &context) override;
 
 	template <class TARGET>
 	TARGET &As() {
@@ -51,6 +54,10 @@ protected:
 
 protected:
 	bool is_valid;
+
+public:
+	//! The key of this state in the connection's registered_state; empty when it is not cached
+	string cache_key;
 };
 
 class AzureStorageFileSystem;
@@ -143,6 +150,8 @@ protected:
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);
+	static bool MatchGlob(vector<string>::const_iterator key, vector<string>::const_iterator key_end,
+	                      vector<string>::const_iterator pattern, vector<string>::const_iterator pattern_end);
 };
 
 } // namespace duckdb
