@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -330,6 +331,32 @@ timestamp_t AzureStorageFileSystem::ToTimestamp(const Azure::DateTime &dt) {
 	auto time_point = static_cast<std::chrono::system_clock::time_point>(dt);
 	auto micros = std::chrono::duration_cast<std::chrono::microseconds>(time_point.time_since_epoch()).count();
 	return timestamp_t(micros);
+}
+
+// taken from s3fs.cpp TODO: deduplicate!
+bool AzureStorageFileSystem::MatchGlob(vector<string>::const_iterator key, vector<string>::const_iterator key_end,
+                                       vector<string>::const_iterator pattern,
+                                       vector<string>::const_iterator pattern_end) {
+	while (key != key_end && pattern != pattern_end) {
+		if (*pattern == "**") {
+			if (std::next(pattern) == pattern_end) {
+				return true;
+			}
+			while (key != key_end) {
+				if (MatchGlob(key, key_end, std::next(pattern), pattern_end)) {
+					return true;
+				}
+				key++;
+			}
+			return false;
+		}
+		if (!duckdb::Glob(key->data(), key->length(), pattern->data(), pattern->length())) {
+			return false;
+		}
+		key++;
+		pattern++;
+	}
+	return key == key_end && pattern == pattern_end;
 }
 
 } // namespace duckdb
