@@ -150,6 +150,8 @@ protected:
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);
+	static bool MatchGlob(vector<string>::const_iterator key, vector<string>::const_iterator key_end,
+	                      vector<string>::const_iterator pattern, vector<string>::const_iterator pattern_end);
 };
 
 } // namespace duckdb

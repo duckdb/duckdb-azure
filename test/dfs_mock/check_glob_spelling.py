@@ -152,7 +152,8 @@ for prefix in (AT, SLASH, f"abfs://c@{ACCT}.dfs.core.windows.net/", "abfss://c/"
         (prefix + "*.csv", prefix, ["top.csv"]),
         (prefix + "data/**", prefix, ["data/a.csv", "data/sub/b.csv", "data/sub/deep/c.csv"]),
         (prefix + "data/*/*.csv", prefix, ["data/sub/b.csv"]),
-        (prefix + "data/*/", prefix, []),
+        # a trailing slash is ignored: the same files as data/*
+        (prefix + "data/*/", prefix, ["data/a.csv"]),
         (prefix + "sp ace/*.csv", prefix, ["sp ace/d.csv"]),
         (prefix + "pct%20dir/*.csv", prefix, ["pct%20dir/e.csv"]),
         (prefix + "uni/\u00fcn\u00ef/*.csv", prefix, ["uni/\u00fcn\u00ef/f.csv"]),
