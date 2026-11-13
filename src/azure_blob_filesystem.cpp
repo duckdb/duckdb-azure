@@ -211,7 +211,7 @@ bool AzureBlobStorageFileSystem::ListFilesExtended(const string &path_in,
 		throw InvalidInputException("ListFiles does not support globs");
 	}
 	// Normalize: to end with '/' so it's a clear dir prefix
-	auto path = (!path_in.empty() && path_in.back() == '/') ? path_in : (path_in + '/');
+	auto path = AsDirectoryPath(path_in);
 	auto url = ParseUrl(path);
 	auto storage_context = GetOrCreateStorageContext(opener, path, url);
 	auto container = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(url.container);
@@ -334,9 +334,9 @@ bool AzureBlobStorageFileSystem::DirectoryExists(const string &dirname, optional
 		throw InternalException("Cannot do Azure storage directory test without FileOpener");
 	}
 	// auto handle = OpenFile(dirname, FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS, opener);
-	auto dir_slashed = dirname[dirname.length() - 1] == '/' ? dirname : (dirname + '/');
+	auto dir_slashed = AsDirectoryPath(dirname);
 	auto dir_url = ParseUrl(dir_slashed);
-	auto storage_context = GetOrCreateStorageContext(opener, dirname, dir_url);
+	auto storage_context = GetOrCreateStorageContext(opener, dir_slashed, dir_url);
 	auto container_client = storage_context->As<AzureBlobContextState>().GetBlobContainerClient(dir_url.container);
 
 	Azure::Storage::Blobs::ListBlobsOptions options;

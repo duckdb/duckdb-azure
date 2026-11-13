@@ -149,6 +149,8 @@ protected:
 
 	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
 	static AzureOptions ParseAzureOptions(optional_ptr<FileOpener> opener);
+	// The path with a trailing '/': the spelling of a directory, for listings and secret lookups (see LookupSecret)
+	static string AsDirectoryPath(const string &path);
 
 public:
 	static timestamp_t ToTimestamp(const Azure::DateTime &dt);
