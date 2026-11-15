@@ -375,14 +375,20 @@ bool AzureBlobStorageFileSystem::DirectoryExists(const string &dirname, optional
 
 	Azure::Storage::Blobs::ListBlobsOptions options;
 	options.Prefix = dir_url.path;
-	Azure::Storage::Blobs::ListBlobsPagedResponse res;
+	// Without a page size, the service returns up to 5,000 names.
+	options.PageSizeHint = 1;
 	try {
-		res = container_client.ListBlobs(options);
+		// Follow continuation token, if any.
+		for (auto page = container_client.ListBlobs(options); page.HasPage(); page.MoveToNextPage()) {
+			if (!page.Blobs.empty()) {
+				return true;
+			}
+		}
 	} catch (Azure::Storage::StorageException &e) {
 		throw IOException("AzureBlobStorageFileSystem Read to %s failed with %s Reason Phrase: %s", dir_slashed,
 		                  e.ErrorCode, e.ReasonPhrase);
 	}
-	return !res.Blobs.empty();
+	return false;
 }
 
 bool AzureBlobStorageFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
