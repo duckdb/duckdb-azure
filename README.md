@@ -127,6 +127,12 @@ The block size can be any positive value up to 4,000 MiB (Azure's per-request li
 | `azure_write_block_size` | `8MiB` | Size of each block for Blob/DFS writes. `0` restores the default. Max 4,000 MiB. Increase to raise the file size ceiling. |
 | `azure_write_staged_blocks_per_commit` | `0` | Blocks staged before an intermediate commit. `0` disables intermediate commits; partial writes are not visible until the file is closed. |
 
+## HTTP statistics
+
+Set `azure_http_stats = true` to include Azure HTTP statistics in `EXPLAIN ANALYZE`.
+Downloaded bytes count response bodies, not the object sizes advertised by HEAD
+responses. HEAD requests still contribute to the request count.
+
 ## Supported architectures
 
 The extension is tested & distributed for Linux (x64, arm64), MacOS (x64, arm64) and Windows (x64)

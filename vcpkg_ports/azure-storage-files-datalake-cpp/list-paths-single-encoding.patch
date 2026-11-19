@@ -1,0 +1,24 @@
+DataLakeDirectoryClient::ListPaths: decode the already encoded directory path before the
+request encodes it again (fix from azure-storage-files-datalake-cpp 12.16.0). Drop this
+overlay port once vcpkg.json resolves datalake 12.16.0 or later.
+
+--- a/sdk/storage/azure-storage-files-datalake/src/datalake_directory_client.cpp
++++ b/sdk/storage/azure-storage-files-datalake/src/datalake_directory_client.cpp
+@@ -233,7 +233,7 @@
+       }
+       if (!directoryPath.empty())
+       {
+-        protocolLayerOptions.Path = directoryPath;
++        protocolLayerOptions.Path = Core::Url::Decode(directoryPath);
+       }
+     }
+     else
+@@ -248,7 +248,7 @@
+       const std::string directoryPath(firstSlashPos, currentPath.end());
+       if (!directoryPath.empty())
+       {
+-        protocolLayerOptions.Path = directoryPath;
++        protocolLayerOptions.Path = Core::Url::Decode(directoryPath);
+       }
+ 
+       fileSystemUrl = m_pathUrl;

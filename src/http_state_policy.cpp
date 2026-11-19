@@ -40,7 +40,8 @@ HttpStatePolicy::Send(Azure::Core::Http::Request &request, Azure::Core::Http::Po
 	}
 
 	auto result = next_policy.Send(request, context);
-	if (result != nullptr) {
+	// HEAD's Content-Length describes the object, not a transferred response body.
+	if (result != nullptr && method != HttpMethod::Head) {
 		const auto &response_body = result->GetBody();
 		if (response_body.size() != 0) {
 			http_state->total_bytes_received += response_body.size();
