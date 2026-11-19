@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
@@ -78,14 +79,38 @@ AzureFileHandle::AzureFileHandle(AzureStorageFileSystem &fs, const OpenFileInfo 
 	}
 }
 
+bool AzureStorageFileSystem::WantsExclusiveCreate(const FileOpenFlags &flags) {
+	return flags.ExclusiveCreate() && flags.OpenForWriting() &&
+	       (flags.CreateFileIfNotExists() || flags.OverwriteExistingFile());
+}
+
+bool AzureStorageFileSystem::IsAlreadyExists(const Azure::Storage::StorageException &e) {
+	// Azure answers a create with If-None-Match: * on an existing path with 409 BlobAlreadyExists (Blob) or
+	// 409 PathAlreadyExists (DFS). The request carries no other precondition, so a 412 (ConditionNotMet, or
+	// LeaseIdMissing on a leased blob) also means that the path exists.
+	const auto status = int(e.StatusCode);
+	return status == 412 ||
+	       (status == 409 && (e.ErrorCode == "BlobAlreadyExists" || e.ErrorCode == "PathAlreadyExists"));
+}
+
+const string AzureStorageFileSystem::EXCLUSIVE_CREATE_TOKEN_KEY = "duckdb_exclusive_create";
+
+string AzureStorageFileSystem::NewExclusiveCreateToken() {
+	return UUID::ToString(UUID::GenerateRandomUUID());
+}
+
+bool AzureStorageFileSystem::HasExclusiveCreateToken(const Azure::Storage::Metadata &metadata, const string &token) {
+	auto it = metadata.find(EXCLUSIVE_CREATE_TOKEN_KEY); // NOTE: Metadata is case-insensitive
+	return it != metadata.end() && it->second == token;
+}
+
 bool AzureFileHandle::PostConstruct() {
 	return static_cast<AzureStorageFileSystem &>(file_system).LoadFileInfo(*this);
 }
 
 bool AzureStorageFileSystem::LoadFileInfo(AzureFileHandle &handle) {
 	try {
-		LoadRemoteFileInfo(handle);
-		if (handle.flags.ReturnNullIfExists()) {
+		if (!LoadRemoteFileInfo(handle)) {
 			return false;
 		}
 	} catch (const Azure::Storage::StorageException &e) {

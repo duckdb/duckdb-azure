@@ -64,7 +64,7 @@ public:
 	}
 
 	// From AzureFilesystem
-	void LoadRemoteFileInfo(AzureFileHandle &handle) override;
+	bool LoadRemoteFileInfo(AzureFileHandle &handle) override;
 	int64_t Write(FileHandle &handle, void *buffer, int64_t nr_bytes) override;
 	void Write(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override;
 	void FileSync(FileHandle &handle) override;

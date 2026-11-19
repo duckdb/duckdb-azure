@@ -91,6 +91,10 @@ jobs:
         run: |
           python3 test/token_requests/check_token_requests.py ./build/release/duckdb ./build/release/extension/azure/azure.duckdb_extension
 
+      - name: Exclusive create and NULL_IF_EXISTS (DFS mock and Azurite)
+        run: |
+          python3 test/null_if_exists/check_null_if_exists.py ./build/release/extension/azure/azure.duckdb_extension --azurite "$AZURE_STORAGE_CONNECTION_STRING" writes
+
       - name: Azure test server log
         if: always()
         shell: bash
