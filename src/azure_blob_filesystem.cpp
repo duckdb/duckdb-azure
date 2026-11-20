@@ -19,6 +19,7 @@
 #include <azure/storage/blobs.hpp>
 #include <azure/storage/blobs/blob_options.hpp>
 
+#include <cerrno>
 #include <cstdlib>
 
 namespace duckdb {
@@ -320,7 +321,9 @@ bool AzureBlobStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 		if (afh.flags.ReturnNullIfExists()) {
 			return false;
 		}
-		throw IOException("AzureBlobStorageFileSystem will not open file: '%s', ExclusiveCreate specified while file "
+		// errno=EEXIST, as LocalFileSystem reports it, so callers can tell "exists" without matching the text
+		throw IOException({{"errno", std::to_string(EEXIST)}},
+		                  "AzureBlobStorageFileSystem will not open file: '%s', ExclusiveCreate specified while file "
 		                  "already exists.",
 		                  afh.path);
 	}

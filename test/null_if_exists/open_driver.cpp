@@ -4,7 +4,8 @@
 //
 // Usage: open_driver <azure.duckdb_extension> <setup.sql> <op> <url> [arg]
 //   nie  <url> <content>  EXCLUSIVE_CREATE | NULL_IF_EXISTS; prints "created" (and writes content) or "null"
-//   excl <url> <content>  EXCLUSIVE_CREATE only; prints "created" or "error: <message>"
+//   excl <url> <content>  EXCLUSIVE_CREATE only; prints "created" or
+//                         "error: <message> [errno=<extra_info errno, or none> type=<exception type>]"
 //   race <url> <n>        n threads run "nie" on url at once, content "writer-<i>";
 //                         prints "winners=<k> errors=<e> winner=writer-<i>"
 //   cat  <url>            prints "size=<n> content=<bytes>", or "missing"
@@ -89,7 +90,10 @@ int main(int argc, char **argv) {
 				std::cout << (created ? "created" : "null") << std::endl;
 			} catch (std::exception &e) {
 				ErrorData error(e);
-				std::cout << "error: " << error.RawMessage() << std::endl;
+				auto &info = error.ExtraInfo();
+				auto it = info.find("errno");
+				std::cout << "error: " << error.RawMessage() << " [errno=" << (it == info.end() ? "none" : it->second)
+				          << " type=" << Exception::ExceptionTypeToString(error.Type()) << "]" << std::endl;
 			}
 		} else if (op == "race") {
 			int n = std::stoi(arg);
