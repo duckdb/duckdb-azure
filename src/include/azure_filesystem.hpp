@@ -9,6 +9,8 @@
 #include "duckdb/main/client_context_state.hpp"
 
 #include <azure/core/datetime.hpp>
+#include <azure/storage/common/storage_common.hpp>
+#include <azure/storage/common/storage_exception.hpp>
 #include <cstdint>
 #include <ctime>
 
@@ -147,7 +149,19 @@ protected:
 	virtual shared_ptr<AzureContextState> CreateStorageContext(optional_ptr<FileOpener> opener, const string &path,
 	                                                           const AzureParsedUrl &parsed_url) = 0;
 
-	virtual void LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
+	// Loads the remote metadata, creating or truncating the file if the open flags ask for it. Returns false only
+	// when EXCLUSIVE_CREATE | NULL_IF_EXISTS is set and the file already exists (OpenFile then returns nullptr).
+	virtual bool LoadRemoteFileInfo(AzureFileHandle &handle) = 0;
+	// Exclusive create (EXCLUSIVE_CREATE with FILE_CREATE or FILE_CREATE_NEW, for writing): one conditional create
+	static bool WantsExclusiveCreate(const FileOpenFlags &flags);
+	// Whether a conditional create (If-None-Match: *) failed because the path already exists
+	static bool IsAlreadyExists(const Azure::Storage::StorageException &e);
+	// An exclusive create stores a fresh token under this metadata key. If the SDK retries a create whose answer was
+	// lost, the retry fails with "already exists"; the token tells our own earlier create apart from another
+	// creator's.
+	static const string EXCLUSIVE_CREATE_TOKEN_KEY;
+	static string NewExclusiveCreateToken();
+	static bool HasExclusiveCreateToken(const Azure::Storage::Metadata &metadata, const string &token);
 	static AzureOptions ParseAzureOptions(optional_ptr<FileOpener> opener);
 	// The path with a trailing '/': the spelling of a directory, for listings and secret lookups (see LookupSecret)
 	static string AsDirectoryPath(const string &path);

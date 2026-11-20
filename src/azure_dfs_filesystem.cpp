@@ -330,15 +330,15 @@ bool AzureDfsStorageFileSystem::ListFilesExtended(const string &path_in,
 	return rv;
 }
 
-void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
+bool AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	auto &afh = handle.Cast<AzureDfsStorageFileHandle>();
 
 	if (afh.IsRemoteLoaded()) {
-		return;
+		return true;
 	}
 
 	// handling a couple situations here:
-	// - does exist, but want exclusive create
+	// - exclusive create: create only if missing, atomically; if it exists, nullptr (NULL_IF_EXISTS) or throw
 	// - does exist, just get the data
 	// - does exist, truncate (same API as create)
 	// - doesn't exist, must be created (file; dir create doesn't happen here)
@@ -359,22 +359,53 @@ void AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 	};
 	auto truncate_file = create_file;
 
+	if (WantsExclusiveCreate(afh.flags)) {
+		// As O_CREAT | O_EXCL: one conditional create, so of two concurrent creators only one gets a handle
+		Azure::Storage::Files::DataLake::CreateFileOptions create_opts;
+		create_opts.AccessConditions.IfNoneMatch = Azure::ETag::Any();
+		const auto token = NewExclusiveCreateToken();
+		create_opts.Metadata[EXCLUSIVE_CREATE_TOKEN_KEY] = token;
+		try {
+			auto res_create = afh.file_client.Create(create_opts);
+			set_props(false, 0, ToTimestamp(res_create.Value.LastModified), res_create.Value.ETag.ToString());
+			return true;
+		} catch (const Azure::Storage::StorageException &e) {
+			if (!IsAlreadyExists(e)) {
+				throw;
+			}
+		}
+		// The SDK retries a create whose answer was lost (a dropped connection, a 5xx). If the lost attempt went
+		// through, the retry sees "already exists"; the path then carries our token, and the file is ours.
+		auto res_props = afh.file_client.GetProperties();
+		if (HasExclusiveCreateToken(res_props.Value.Metadata, token)) {
+			set_props(false, res_props.Value.FileSize, ToTimestamp(res_props.Value.LastModified),
+			          res_props.Value.ETag.ToString());
+			return true;
+		}
+		if (afh.flags.ReturnNullIfExists()) {
+			return false;
+		}
+		throw IOException("AzureDfsStorageFileSystem will not open file: '%s', ExclusiveCreate specified while file "
+		                  "already exists.",
+		                  afh.path);
+	}
+
 	try {
 		auto res_props = afh.file_client.GetProperties();
-		if (afh.flags.ExclusiveCreate()) {
-			throw IOException("AzureDfsStorageFileSystem will not open file: '%s', ExclusiveCreate specified "
-			                  "while file already exists.");
-		} else if (afh.flags.OpenForWriting() && afh.flags.OverwriteExistingFile()) {
-			return truncate_file();
+		if (afh.flags.OpenForWriting() && afh.flags.OverwriteExistingFile()) {
+			truncate_file();
+			return true;
 		}
 		// NOTE: honor convention for S3/Azure "foo/" empty file -> "foo" dir marker
 		auto is_dir = StringUtil::EndsWith(afh.GetPath(), "/") || res_props.Value.IsDirectory;
-		return set_props(is_dir, res_props.Value.FileSize, ToTimestamp(res_props.Value.LastModified),
-		                 res_props.Value.ETag.ToString());
+		set_props(is_dir, res_props.Value.FileSize, ToTimestamp(res_props.Value.LastModified),
+		          res_props.Value.ETag.ToString());
+		return true;
 	} catch (const Azure::Storage::StorageException &e) {
 		if (int(e.StatusCode) == 404 && afh.flags.OpenForWriting() &&
 		    (afh.flags.OverwriteExistingFile() || afh.flags.CreateFileIfNotExists())) {
-			return create_file();
+			create_file();
+			return true;
 		}
 		throw;
 	}
