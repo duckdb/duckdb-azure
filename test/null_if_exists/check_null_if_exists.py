@@ -15,6 +15,7 @@ compiler ($CXX, else the one in the build's CMakeCache.txt, else c++).
 
 import base64
 import email.utils
+import errno
 import http.server
 import os
 import pathlib
@@ -279,7 +280,11 @@ def cases(run, base, mock):
     check(
         "exclusive: existing throws",
         run("excl", base + "excl.json", "two"),
-        lambda got: got.startswith("error: ") and "already exists" in got and base + "excl.json" in got,
+        # an IOException with errno=EEXIST in its extra info, as LocalFileSystem reports it on POSIX
+        lambda got: got.startswith("error: ")
+        and "already exists" in got
+        and base + "excl.json" in got
+        and got.endswith(f"[errno={errno.EEXIST} type=IO]"),
     )
     check("exclusive: content unchanged", run("cat", base + "excl.json"), "size=3 content=one")
 

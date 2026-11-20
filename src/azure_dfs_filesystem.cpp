@@ -21,6 +21,7 @@
 #include <azure/storage/files/datalake/datalake_file_system_client.hpp>
 #include <azure/storage/files/datalake/datalake_options.hpp>
 #include <azure/storage/files/datalake/datalake_responses.hpp>
+#include <cerrno>
 #include <cstddef>
 #include <filesystem>
 
@@ -385,7 +386,9 @@ bool AzureDfsStorageFileSystem::LoadRemoteFileInfo(AzureFileHandle &handle) {
 		if (afh.flags.ReturnNullIfExists()) {
 			return false;
 		}
-		throw IOException("AzureDfsStorageFileSystem will not open file: '%s', ExclusiveCreate specified while file "
+		// errno=EEXIST, as LocalFileSystem reports it, so callers can tell "exists" without matching the text
+		throw IOException({{"errno", std::to_string(EEXIST)}},
+		                  "AzureDfsStorageFileSystem will not open file: '%s', ExclusiveCreate specified while file "
 		                  "already exists.",
 		                  afh.path);
 	}
