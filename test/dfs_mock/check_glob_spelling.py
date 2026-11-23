@@ -13,6 +13,7 @@ spellings. Needs only the Python standard library.
 import email.utils
 import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -20,6 +21,8 @@ import urllib.parse
 from xml.sax.saxutils import escape
 
 ACCT = "acct"
+DELTA_TABLE = "lh/Tables/main/t"
+DELTA_LOG = f"{DELTA_TABLE}/_delta_log"
 FILES = {
     "top.csv": b"x\n0\n",
     "data/a.csv": b"x\n1\n",
@@ -30,6 +33,8 @@ FILES = {
     "uni/\u00fcn\u00ef/f.csv": b"x\n6\n",
     "lake/main/t/ducklake-0001.parquet": b"PAR1",
     "lake/main/t/ducklake-0002.parquet": b"PAR1",
+    f"{DELTA_TABLE}/part-000.parquet": b"PAR1",
+    f"{DELTA_LOG}/00000000000000000000.json": b"{}\n",
 }
 DIRS = {"/".join(f.split("/")[:i]) for f in FILES for i in range(1, f.count("/") + 1)}
 NOW = email.utils.formatdate(usegmt=True)
@@ -112,17 +117,17 @@ class Mock(http.server.BaseHTTPRequestHandler):
             entries = [(n, d) for n, d in entries if "/" not in n[len(prefix) :]]
         paths = []
         for name, is_dir in entries:
-            entry = dict(
-                name=name,
-                lastModified=NOW,
-                contentLength="0" if is_dir else str(len(FILES[name])),
-                owner="$superuser",
-                group="$superuser",
-                permissions="rwxr-x---",
-                etag="0x1",
-            )
+            entry = dict(name=name, lastModified=NOW, etag="0x1")
             if is_dir:
                 entry["isDirectory"] = "true"
+            # OneLake omits size and ACL metadata from the _delta_log directory (duckdb-azure#226).
+            if name != DELTA_LOG:
+                entry.update(
+                    contentLength="0" if is_dir else str(len(FILES[name])),
+                    owner="$superuser",
+                    group="$superuser",
+                    permissions="rwxr-x---",
+                )
             paths.append(entry)
         self.reply(200, json.dumps({"paths": paths}).encode(), {"Content-Type": "application/json"})
 
@@ -158,8 +163,10 @@ for prefix in (AT, SLASH, f"abfs://c@{ACCT}.dfs.core.windows.net/", "abfss://c/"
         (prefix + "pct%20dir/*.csv", prefix, ["pct%20dir/e.csv"]),
         (prefix + "uni/\u00fcn\u00ef/*.csv", prefix, ["uni/\u00fcn\u00ef/f.csv"]),
     ]
-# the blob file system is not touched by #211; its spellings must stay as they are
 GLOBS += [
+    (AT + DELTA_TABLE + "/*.parquet", AT, [f"{DELTA_TABLE}/part-000.parquet"]),
+    (AT + DELTA_TABLE + "/*/*.json", AT, [f"{DELTA_LOG}/00000000000000000000.json"]),
+    # the blob file system is not touched by #211; its spellings must stay as they are
     ("az://c/data/*.csv", "az://c/", ["data/a.csv"]),
     (
         f"az://{ACCT}.blob.core.windows.net/c/data/**",
@@ -168,7 +175,7 @@ GLOBS += [
     ),
 ]
 
-SETUP = """.output /dev/null
+SETUP = """.output {devnull}
 LOAD '{extension}';
 SET azure_transport_option_type = 'curl';
 CREATE SECRET s (TYPE azure, CONNECTION_STRING '{connection_string}');
@@ -181,7 +188,7 @@ def literal(s):
 
 
 def duckdb(shell, extension, connection_string, sql):
-    setup = SETUP.format(extension=extension, connection_string=connection_string)
+    setup = SETUP.format(extension=extension, connection_string=connection_string, devnull=os.devnull)
     proc = subprocess.run(
         [shell, "-unsigned", "-csv", "-noheader", "-bail"],
         input=setup + sql,
