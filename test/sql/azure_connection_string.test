@@ -1,0 +1,253 @@
+# name: test/sql/azure_connection_string.test
+# description: Validate connection strings without making network requests
+# group: [sql]
+
+require azure
+
+foreach prefix az:// azure:// abfs:// abfss://
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'not-a-connection-string'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: settings must have the form name=value.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING ' ; ; '
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+<REGEX>:.*Invalid Azure connection string: AccountName or (BlobEndpoint|DfsEndpoint) is required.*
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING '=value'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: setting names cannot be empty.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'AccountName=first;accountname=second'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: duplicate settings are not allowed.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'AccountKey=dGVzdA==;BlobEndpoint=https://account.blob.core.windows.net;DfsEndpoint=https://account.dfs.core.windows.net'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: AccountName is required when AccountKey is provided.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'DefaultEndpointsProtocol=ftp;AccountName=account;AccountKey=dGVzdA=='
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: DefaultEndpointsProtocol must be http or https.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'BlobEndpoint=ftp://account.blob.core.windows.net;DfsEndpoint=ftp://account.dfs.core.windows.net'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+must be an absolute HTTP(S) URL.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'BlobEndpoint=account.blob.core.windows.net;DfsEndpoint=account.dfs.core.windows.net'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+must be an absolute HTTP(S) URL.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'BlobEndpoint=https://account.blob.core.windows.net:invalid;DfsEndpoint=https://account.dfs.core.windows.net'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: service endpoints must be valid HTTP(S) URLs.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'BlobEndpoint=https://account.blob.core.windows.net:65536;DfsEndpoint=https://account.dfs.core.windows.net'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: service endpoint port is out of range.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'SharedAccessSignature=sv=2021-10-04&sig=dGVzdA%3D%3D'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+<REGEX>:.*Invalid Azure connection string: AccountName or (BlobEndpoint|DfsEndpoint) is required.*
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'UseDevelopmentStorage=false'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: UseDevelopmentStorage must be true.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'DevelopmentStorageProxyUri=http://localhost'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+DevelopmentStorageProxyUri requires UseDevelopmentStorage=true.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'UseDevelopmentStorage=true;DevelopmentStorageProxyUri=localhost'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: DevelopmentStorageProxyUri must be an absolute HTTP(S) URL.
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'UseDevelopmentStorage=true;BlobEndpoint=http://localhost:28000/devstoreaccount1'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+UseDevelopmentStorage cannot be combined with other settings except DevelopmentStorageProxyUri.
+
+# A shorter name must not match a prefix of AccountName.
+foreach connection_string AccountName=accountlong;AccountKey=dGVzdA== DefaultEndpointsProtocol=http;AccountName=accountlong;AccountKey=dGVzdA== AccountName=accountlong;AccountKey=dGVzdA==;EndpointSuffix=core.chinacloudapi.cn AccountName=accountlong;SharedAccessSignature=sv=2021-10-04&sig=dGVzdA%3D%3D
+
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING '{connection_string}'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}account.blob.core.windows.net/container/file.csv');
+----
+The provided connection string does not match the storage account named account
+
+endloop
+
+# SAS tokens and other setting values must not be mistaken for an AccountName setting.
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'BlobEndpoint=https://other.blob.core.windows.net;DfsEndpoint=https://other.dfs.core.windows.net;SharedAccessSignature=sv=2021-10-04&sig=AccountName=account'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}account.blob.core.windows.net/container/file.csv');
+----
+The provided connection string does not match the storage account named account
+
+# Development storage supplies its account name without an AccountName setting.
+statement ok
+CREATE OR REPLACE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'UseDevelopmentStorage=true'
+);
+
+statement error
+SELECT * FROM read_csv('{prefix}other.blob.core.windows.net/container/file.csv');
+----
+The provided connection string does not match the storage account named other
+
+statement ok
+DROP SECRET connection_string_test;
+
+endloop
+
+# The legacy Blob setting uses the same validation.
+foreach prefix az:// azure://
+
+statement ok
+SET azure_storage_connection_string = 'AccountKey=dGVzdA==';
+
+statement error
+SELECT * FROM read_csv('{prefix}container/file.csv');
+----
+Invalid Azure connection string: AccountName is required when AccountKey is provided.
+
+statement ok
+SET azure_storage_connection_string = '';
+
+endloop
+
+# A connection string for another service is valid, but cannot supply the missing service endpoint.
+statement ok
+CREATE SECRET connection_string_test (
+    TYPE AZURE,
+    CONNECTION_STRING 'QueueEndpoint=https://account.queue.core.windows.net;SharedAccessSignature=sv=2021-10-04&sig=dGVzdA%3D%3D'
+);
+
+statement error
+SELECT * FROM 'az://container/file.csv';
+----
+Invalid Azure connection string: AccountName or BlobEndpoint is required.
+
+statement error
+SELECT * FROM 'abfss://container/file.csv';
+----
+Invalid Azure connection string: AccountName or DfsEndpoint is required.
+
+statement ok
+DROP SECRET connection_string_test;
