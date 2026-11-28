@@ -72,7 +72,11 @@ static void Walk(const Azure::Storage::Files::DataLake::DataLakeFileSystemClient
 					OpenFileInfo info(elt.Name);
 					info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 					auto &options = info.extended_info->options;
-					options.emplace("file_size", Value::BIGINT(elt.FileSize));
+					// The SDK reports 0 when the listing omits contentLength, so a 0 is not known to be the real size;
+					// without file_size, opening the file fetches it with a HEAD.
+					if (elt.FileSize > 0) {
+						options.emplace("file_size", Value::BIGINT(elt.FileSize));
+					}
 					options.emplace("last_modified",
 					                Value::TIMESTAMP(AzureStorageFileSystem::ToTimestamp(elt.LastModified)));
 					auto etag = AzureStorageFileSystem::StripETagQuotes(elt.ETag);

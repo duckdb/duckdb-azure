@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""A DFS glob returns its results in the spelling of its pattern (duckdb-azure#211).
+"""DFS globs keep the spelling of their pattern (duckdb-azure#211) and survive the sparse entries OneLake lists
+(duckdb-azure#226).
 
 Usage: check_glob_spelling.py <duckdb shell> <azure.duckdb_extension>
 
@@ -13,6 +14,7 @@ spellings. Needs only the Python standard library.
 import email.utils
 import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -20,6 +22,10 @@ import urllib.parse
 from xml.sax.saxutils import escape
 
 ACCT = "acct"
+DELTA_TABLE = "lh/Tables/main/t"
+DELTA_LOG = f"{DELTA_TABLE}/_delta_log"
+# listed without contentLength: its size must come from a HEAD, not from the listing
+SPARSE_FILE = "sparse/s.csv"
 FILES = {
     "top.csv": b"x\n0\n",
     "data/a.csv": b"x\n1\n",
@@ -30,6 +36,10 @@ FILES = {
     "uni/\u00fcn\u00ef/f.csv": b"x\n6\n",
     "lake/main/t/ducklake-0001.parquet": b"PAR1",
     "lake/main/t/ducklake-0002.parquet": b"PAR1",
+    f"{DELTA_TABLE}/part-000.parquet": b"PAR1",
+    f"{DELTA_LOG}/00000000000000000000.json": b"{}\n",
+    SPARSE_FILE: b"x\n7\n",
+    "empty/e.csv": b"",
 }
 DIRS = {"/".join(f.split("/")[:i]) for f in FILES for i in range(1, f.count("/") + 1)}
 NOW = email.utils.formatdate(usegmt=True)
@@ -112,17 +122,19 @@ class Mock(http.server.BaseHTTPRequestHandler):
             entries = [(n, d) for n, d in entries if "/" not in n[len(prefix) :]]
         paths = []
         for name, is_dir in entries:
-            entry = dict(
-                name=name,
-                lastModified=NOW,
-                contentLength="0" if is_dir else str(len(FILES[name])),
-                owner="$superuser",
-                group="$superuser",
-                permissions="rwxr-x---",
-                etag="0x1",
-            )
+            entry = dict(name=name, lastModified=NOW, etag="0x1")
             if is_dir:
                 entry["isDirectory"] = "true"
+            # OneLake omits size and ACL metadata from the _delta_log directory (duckdb-azure#226).
+            if name != DELTA_LOG:
+                entry.update(
+                    contentLength="0" if is_dir else str(len(FILES[name])),
+                    owner="$superuser",
+                    group="$superuser",
+                    permissions="rwxr-x---",
+                )
+            if name == SPARSE_FILE:
+                del entry["contentLength"]
             paths.append(entry)
         self.reply(200, json.dumps({"paths": paths}).encode(), {"Content-Type": "application/json"})
 
@@ -158,8 +170,11 @@ for prefix in (AT, SLASH, f"abfs://c@{ACCT}.dfs.core.windows.net/", "abfss://c/"
         (prefix + "pct%20dir/*.csv", prefix, ["pct%20dir/e.csv"]),
         (prefix + "uni/\u00fcn\u00ef/*.csv", prefix, ["uni/\u00fcn\u00ef/f.csv"]),
     ]
-# the blob file system is not touched by #211; its spellings must stay as they are
 GLOBS += [
+    (AT + DELTA_TABLE + "/*.parquet", AT, [f"{DELTA_TABLE}/part-000.parquet"]),
+    (AT + DELTA_TABLE + "/*/*.json", AT, [f"{DELTA_LOG}/00000000000000000000.json"]),
+    (AT + DELTA_TABLE + "/**", AT, [f"{DELTA_LOG}/00000000000000000000.json", f"{DELTA_TABLE}/part-000.parquet"]),
+    # the blob file system is not touched by #211; its spellings must stay as they are
     ("az://c/data/*.csv", "az://c/", ["data/a.csv"]),
     (
         f"az://{ACCT}.blob.core.windows.net/c/data/**",
@@ -168,7 +183,7 @@ GLOBS += [
     ),
 ]
 
-SETUP = """.output /dev/null
+SETUP = """.output {devnull}
 LOAD '{extension}';
 SET azure_transport_option_type = 'curl';
 CREATE SECRET s (TYPE azure, CONNECTION_STRING '{connection_string}');
@@ -181,7 +196,7 @@ def literal(s):
 
 
 def duckdb(shell, extension, connection_string, sql):
-    setup = SETUP.format(extension=extension, connection_string=connection_string)
+    setup = SETUP.format(extension=extension, connection_string=connection_string, devnull=os.devnull)
     proc = subprocess.run(
         [shell, "-unsigned", "-csv", "-noheader", "-bail"],
         input=setup + sql,
@@ -215,6 +230,24 @@ def main():
         known = ", ".join(literal(data_path + f"main/t/ducklake-000{i}.parquet") for i in (1, 2))
         sql = f"SELECT count(*) FILTER (file NOT IN ({known})), count(*) FROM glob({literal(data_path + '**')});\n"
         checks.append((f"no orphans under {data_path}", sql, "0,2"))
+    # COPY ... PARTITION_BY first lists the target directory, which holds the sparse _delta_log
+    target = AT + DELTA_TABLE
+    checks.append(
+        (
+            "COPY PARTITION_BY into a directory with a sparse entry",
+            f"COPY (SELECT 1 AS x, 2 AS y) TO {literal(target)} (FORMAT csv, PARTITION_BY (x));\n",
+            f'ERROR IO Error: Directory "{target}" is not empty! Enable OVERWRITE option to overwrite files',
+        )
+    )
+    # a file listed without a size is read in full, and a listed size of 0 still reads as empty
+    checks.append(
+        (
+            "read_csv of a file listed without a size",
+            f"SELECT sum(x), count(*) FROM read_csv({literal(AT + 'sparse/*.csv')});\n",
+            "7,1",
+        )
+    )
+    checks.append(("read_blob of an empty file", f"SELECT size FROM read_blob({literal(AT + 'empty/*.csv')});\n", "0"))
     # the returned paths open
     checks.append(
         ("read_csv over a @ glob", f"SELECT sum(x), count(*) FROM read_csv({literal(AT + 'data/**')});\n", "6,3")
